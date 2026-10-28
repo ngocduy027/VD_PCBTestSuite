@@ -1,0 +1,16 @@
+.pytest_cache/
+__pycache__/
+*.pyc
+*.egg-info/
+
+build/
+build_smoke/
+dist/
+
+.venv/
+
+# Release binaries, firmware images and generated deliverables (kept outside source control)
+archive/
+output/
+.codex_tmp/
+.claude/settings.local.json

@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pcbt-app"
+version = "1.2.0"
+description = "Windows CAN test application for motor PCB production and bench test"
+readme = "README.md"
+requires-python = ">=3.14"
+license = { text = "Proprietary" }
+authors = [
+  { name = "OpenAI Codex" }
+]
+dependencies = [
+  "python-can>=4.4,<5",
+  "pyserial>=3.5,<4",
+  "PySide6>=6.8,<7",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3,<9",
+  "pytest-qt>=4.4,<5",
+  "PyInstaller>=6.10,<7",
+]
+
+[project.scripts]
+pcbt-cli = "pcbt_app.cli:main"
+pcbt-gui = "pcbt_app.app:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = ["pcbt_app*"]
