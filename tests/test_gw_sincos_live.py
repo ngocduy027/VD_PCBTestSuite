@@ -20,7 +20,6 @@ from pcbt_app.services.gw_live_reader import GwLiveCycle, GwLiveReader
 from pcbt_app.transport.fake_bus import FakeCanTransport
 from pcbt_app.ui.worker import CanWorker
 
-
 DRIVER_ID = 0x01
 
 

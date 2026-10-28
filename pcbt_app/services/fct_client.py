@@ -1,9 +1,17 @@
+"""Request/response client for the FCT protocol.
+
+One lock per transport serialises FCT transactions, so the worker thread and
+the live GongWang reader never interleave requests on the same adapter.
+"""
+
 from __future__ import annotations
 
+import weakref
+from collections.abc import Callable
 from datetime import datetime
 from threading import Lock
 from time import monotonic
-from typing import Callable, TypeVar
+from typing import TypeVar
 
 from pcbt_app.logging_store import EventLog, RawFrameEvent
 from pcbt_app.models import RawCanFrame
@@ -20,27 +28,59 @@ from pcbt_app.protocol.fct_can import (
 
 
 class FctResponseTimeout(TimeoutError):
+    """No matching FCT response arrived within ``response_timeout_s``."""
+
     pass
 
 
 T = TypeVar("T")
 
 
-_transport_locks: dict[int, tuple[object, Lock]] = {}
+# id(transport) -> (reference to the transport, its transaction lock). Entries
+# hold weak references where possible so they vanish with their transport.
+_transport_locks: dict[int, tuple[Callable[[], object | None], Lock]] = {}
 _transport_locks_guard = Lock()
 
 
+class _StrongRef:
+    """Callable with the ``weakref.ref`` interface that keeps its target alive."""
+
+    __slots__ = ("_target",)
+
+    def __init__(self, target: object) -> None:
+        self._target = target
+
+    def __call__(self) -> object:
+        return self._target
+
+
 def _lock_for_transport(transport: object) -> Lock:
+    """Return the lock shared by every FctClient that uses ``transport``."""
     key = id(transport)
     with _transport_locks_guard:
+        for stale_key in [k for k, (ref, _lock) in _transport_locks.items() if ref() is None]:
+            del _transport_locks[stale_key]
         current = _transport_locks.get(key)
-        if current is None or current[0] is not transport:
-            current = (transport, Lock())
+        if current is None or current[0]() is not transport:
+            ref: Callable[[], object | None]
+            try:
+                ref = weakref.ref(transport)
+            except TypeError:  # not weak-referenceable: keep it alive with the lock
+                ref = _StrongRef(transport)
+            current = (ref, Lock())
             _transport_locks[key] = current
         return current[1]
 
 
 class FctClient:
+    """Sends FCT requests and waits for the matching response.
+
+    Every exchange holds a lock shared by all clients on the same transport, so
+    concurrent users (test thread, GW live reader, calibration) cannot steal each
+    other's responses. Frames that do not match are logged and handed to
+    ``on_unrelated`` so callers can count asynchronous traffic.
+    """
+
     def __init__(
         self,
         transport,
@@ -68,6 +108,7 @@ class FctClient:
         driver_id: int,
         on_unrelated: Callable[[RawCanFrame], None] | None = None,
     ) -> FctResponse:
+        """Send ``request`` and return the first matching response; raises :class:`FctResponseTimeout`."""
         with self._transaction_lock:
             self.transport.send(request)
             self._log("tx", request, f"FCT {opcode.name} test={int(test_id)}")
@@ -167,6 +208,11 @@ class FctClient:
         parameter_override: int = 0,
         on_unrelated: Callable[[RawCanFrame], None] | None = None,
     ) -> FctResponse:
+        """Send START for a test.
+
+        If the START reply is lost, STATUS is queried: a non-IDLE state means the
+        board did start, and that status is returned instead of failing.
+        """
         request = build_fct_start(
             host_id=self.host_id,
             driver_id=driver_id,
@@ -192,6 +238,7 @@ class FctClient:
         test_id: FctTestId,
         on_unrelated: Callable[[RawCanFrame], None] | None = None,
     ) -> FctResponse:
+        """Send STOP; if the reply is lost, fall back to a STATUS query."""
         request = build_fct_simple(
             host_id=self.host_id, driver_id=driver_id, opcode=FctOpcode.STOP, test_id=test_id
         )
@@ -209,6 +256,7 @@ class FctClient:
         test_id: FctTestId,
         on_unrelated: Callable[[RawCanFrame], None] | None = None,
     ) -> FctResponse:
+        """Query the current state and pass/fail counters of a test."""
         request = build_fct_simple(
             host_id=self.host_id, driver_id=driver_id, opcode=FctOpcode.STATUS, test_id=test_id
         )

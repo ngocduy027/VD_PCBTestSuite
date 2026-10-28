@@ -1,10 +1,18 @@
+"""Legacy GongWang encoder test (firmware diagnostic test ID 4).
+
+The firmware drives the encoder UART at 20 kHz for the requested duration and
+then reports completion; the PC reads the ``0x7240..0x7262`` result block and
+judges it against :class:`GongwangAcceptanceCriteria`.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
 from math import isfinite
 from time import monotonic
+from typing import TYPE_CHECKING, Any
 
-from pcbt_app.models import GongwangResultSet
+from pcbt_app.models import DiagnosticTestReportFrame, GongwangResultSet
 from pcbt_app.protocol.mit_firmware import (
     CAN_INDEX_TEST_GONGWANG_ACTUAL_REQUEST_HZ,
     CAN_INDEX_TEST_GONGWANG_ACTUAL_RESPONSE_HZ,
@@ -53,6 +61,7 @@ from pcbt_app.protocol.mit_firmware import (
     GONGWANG_MIN_SUCCESS_PERCENT,
     GONGWANG_TIMEOUT_MARGIN_MS,
     GONGWANG_TIMER_HZ,
+    MotorTestId,
     MotorTestStatus,
     MotorTestStopReason,
     build_gongwang_config_frames,
@@ -65,9 +74,20 @@ from pcbt_app.protocol.mit_firmware import (
 )
 from pcbt_app.transport.base import CanTransportError
 
+if TYPE_CHECKING:
+    from pcbt_app.services.pcb_test_service import PcbTestService, ServiceResult
+
 
 @dataclass(slots=True, frozen=True)
 class GongwangAcceptanceCriteria:
+    """Pass criteria for the legacy GongWang test.
+
+    Metadata fields must equal the expected firmware schema (version 1, 20 kHz,
+    circular-ring RX, command ``0x9A``, 10-byte response). Success percentage and
+    the request/valid-response rates (relative to the rate achievable with the
+    10 MHz timer) must reach the minimum percentages.
+    """
+
     schema_version: int = GONGWANG_EXPECTED_SCHEMA_VERSION
     target_hz: int = GONGWANG_EXPECTED_TARGET_HZ
     rx_mode: int = GONGWANG_EXPECTED_RX_MODE
@@ -121,21 +141,26 @@ GONGWANG_RESULT_FIELDS: tuple[tuple[str, int, str, bool], ...] = (
 
 
 def run_gongwang_encoder_test(
-    service,
+    service: PcbTestService,
     duration_ms: int = GONGWANG_DEFAULT_DURATION_MS,
     driver_id: int | None = None,
     criteria: GongwangAcceptanceCriteria = DEFAULT_GONGWANG_CRITERIA,
-):
-    self = service
+) -> ServiceResult:
+    """Run the legacy GongWang test and read back its full result block.
+
+    Waits up to ``duration_ms + GONGWANG_TIMEOUT_MARGIN_MS`` for the completion
+    report, then reads every field in ``GONGWANG_RESULT_FIELDS`` one index at a
+    time and judges them with ``criteria``.
+    """
     start = monotonic()
     events: list[str] = []
 
     if driver_id is None:
-        return self._result("GongWang Encoder Test", False, "Driver ID is required; run Detect ID first", start, events)
+        return service._result("GongWang Encoder Test", False, "Driver ID is required; run Detect ID first", start, events)
     if not 0 <= driver_id <= 0xFF:
-        return self._result("GongWang Encoder Test", False, f"Driver ID out of range: {driver_id}", start, events)
+        return service._result("GongWang Encoder Test", False, f"Driver ID out of range: {driver_id}", start, events)
     if not GONGWANG_MIN_DURATION_MS <= duration_ms <= GONGWANG_MAX_DURATION_MS:
-        return self._result(
+        return service._result(
             "GongWang Encoder Test",
             False,
             f"GongWang duration must be {GONGWANG_MIN_DURATION_MS}..{GONGWANG_MAX_DURATION_MS} ms",
@@ -143,13 +168,13 @@ def run_gongwang_encoder_test(
             events,
         )
 
-    drain_result = self._drain_before_command("GongWang Encoder Test")
+    drain_result = service._drain_before_command("GongWang Encoder Test")
     if drain_result is not None:
         return drain_result
 
     deadline = start + (duration_ms + GONGWANG_TIMEOUT_MARGIN_MS) / 1000.0
     report = None
-    values: dict[str, int | float | None] = {name: None for name, _, _, _ in GONGWANG_RESULT_FIELDS}
+    values: dict[str, Any] = {name: None for name, _, _, _ in GONGWANG_RESULT_FIELDS}
     report_state: dict[str, int | float | None] = {
         "report_test_id": None,
         "report_status": None,
@@ -158,18 +183,18 @@ def run_gongwang_encoder_test(
     }
 
     try:
-        for frame in build_gongwang_config_frames(driver_id, duration_ms):
-            self._send_diagnostic_command(frame, "write 0x7240 duration", deadline)
-        self._send_diagnostic_command(build_openloop_unlock_frame(driver_id), "unlock diagnostic test", deadline)
+        for config_frame in build_gongwang_config_frames(driver_id, duration_ms):
+            service._send_diagnostic_command(config_frame, "write 0x7240 duration", deadline)
+        service._send_diagnostic_command(build_openloop_unlock_frame(driver_id), "unlock diagnostic test", deadline)
         events.append("wrote 0x7204 = 0x54455354")
-        self._send_diagnostic_command(build_gongwang_start_frame(driver_id), "start GongWang encoder test", deadline)
+        service._send_diagnostic_command(build_gongwang_start_frame(driver_id), "start GongWang encoder test", deadline)
         events.append("wrote 0x7200 = 4")
 
         while monotonic() < deadline:
-            frame = self._recv_once(min(0.01, max(0.0, deadline - monotonic())))
+            frame = service._recv_once(min(0.01, max(0.0, deadline - monotonic())))
             if frame is None:
                 continue
-            candidate = parse_diagnostic_test_report(frame, driver_id, test_id=4)
+            candidate = parse_diagnostic_test_report(frame, driver_id, test_id=MotorTestId.GONGWANG_ENCODER)
             if candidate is None:
                 events.append(f"ignored frame 0x{frame.arbitration_id:08X}")
                 continue
@@ -183,8 +208,8 @@ def run_gongwang_encoder_test(
         if report is None:
             reason = "Timeout waiting for GongWang encoder completion report"
             events.append(reason)
-            _cleanup(self, driver_id, events)
-            return self._result(
+            _cleanup(service, driver_id, events)
+            return service._result(
                 "GongWang Encoder Test", False, reason, start, events, returned_driver_id=driver_id
             )
 
@@ -196,14 +221,14 @@ def run_gongwang_encoder_test(
         )
         for name, index, wire_type, _required in GONGWANG_RESULT_FIELDS:
             if wire_type == "float":
-                values[name] = self._read_float(driver_id, index, deadline, events, report_state)
+                values[name] = service._read_float(driver_id, index, deadline, events, report_state)
             else:
-                values[name] = self._read_u32(driver_id, index, deadline, events, report_counters=report_state)
+                values[name] = service._read_u32(driver_id, index, deadline, events, report_counters=report_state)
     except CanTransportError as exc:
         events.append(str(exc))
-        _cleanup(self, driver_id, events)
+        _cleanup(service, driver_id, events)
         result_set = GongwangResultSet(**values)
-        return self._result(
+        return service._result(
             "GongWang Encoder Test",
             False,
             str(exc),
@@ -217,10 +242,11 @@ def run_gongwang_encoder_test(
         )
 
     result_set = GongwangResultSet(**values)
-    return _finish_result(self, start, events, driver_id, report, result_set, criteria)
+    return _finish_result(service, start, events, driver_id, report, result_set, criteria)
 
 
-def _cleanup(service, driver_id: int, events: list[str]) -> None:
+def _cleanup(service: PcbTestService, driver_id: int, events: list[str]) -> None:
+    """Best-effort stop of the GongWang test after a failure."""
     try:
         service._send(build_gongwang_stop_frame(driver_id), "stop GongWang encoder test")
         events.append("wrote 0x7200 = 0")
@@ -228,7 +254,21 @@ def _cleanup(service, driver_id: int, events: list[str]) -> None:
         events.append(f"failed to send stop command: {exc}")
 
 
-def _finish_result(service, start, events, driver_id, report, results, criteria):
+def _finish_result(
+    service: PcbTestService,
+    start: float,
+    events: list[str],
+    driver_id: int,
+    report: DiagnosticTestReportFrame,
+    results: GongwangResultSet,
+    criteria: GongwangAcceptanceCriteria,
+) -> ServiceResult:
+    """Judge the GongWang results.
+
+    PASS requires: all required fields read, a clean completion report
+    (FINISHED/COMPLETED), matching metadata, enough successful responses, and
+    request/valid-response rates close enough to the achievable rate.
+    """
     required_missing = [
         name for name, _index, _wire_type, required in GONGWANG_RESULT_FIELDS
         if required and getattr(results, name) is None
@@ -241,7 +281,7 @@ def _finish_result(service, start, events, driver_id, report, results, criteria)
         events.append("warning: missing informational results: " + ", ".join(informational_missing))
 
     firmware_ok = (
-        report.test_id == 4
+        report.test_id == MotorTestId.GONGWANG_ENCODER
         and report.status == MotorTestStatus.FINISHED
         and report.stop_reason == MotorTestStopReason.COMPLETED
     )

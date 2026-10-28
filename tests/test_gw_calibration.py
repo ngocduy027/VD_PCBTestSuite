@@ -21,7 +21,6 @@ from pcbt_app.protocol.gw_calibration import (
 from pcbt_app.services.gw_calibration import GwCalibrationRunner
 from pcbt_app.transport.fake_bus import FakeCanTransport
 
-
 DRIVER_ID = 0x34
 
 

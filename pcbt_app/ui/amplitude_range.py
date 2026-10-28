@@ -1,3 +1,5 @@
+"""Operator-configurable amplitude colour thresholds and their settings dialog."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -5,12 +7,24 @@ from math import isfinite
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
-    QDialog, QDialogButtonBox, QDoubleSpinBox, QGridLayout, QLabel, QVBoxLayout,
+    QDialog,
+    QDialogButtonBox,
+    QDoubleSpinBox,
+    QGridLayout,
+    QLabel,
+    QVBoxLayout,
 )
 
 
 @dataclass(frozen=True)
 class AmplitudeRange:
+    """Colour thresholds (mV) for encoder amplitude fields.
+
+    Below ``yellow_start`` or above ``green_end`` is red, ``yellow_start`` up to
+    ``green_start`` is yellow, and ``green_start..green_end`` is green. Persisted in
+    QSettings under ``encoder/amplitude/*``.
+    """
+
     yellow_start: float = 600.0
     green_start: float = 1000.0
     green_end: float = 1800.0
@@ -24,6 +38,7 @@ class AmplitudeRange:
 
     @classmethod
     def load(cls, settings):
+        """Read limits from QSettings, falling back to defaults on missing or invalid values."""
         if settings is None:
             return cls()
         try:
@@ -33,11 +48,13 @@ class AmplitudeRange:
             return cls()
 
     def save(self, settings):
+        """Write limits to QSettings (no-op without settings)."""
         if settings is not None:
             for key, value in vars(self).items():
                 settings.setValue(f"encoder/amplitude/{key}", value)
 
     def legend(self):
+        """Rich-text colour legend shown under the amplitude fields."""
         low, start, end = self.yellow_start, self.green_start, self.green_end
         return (f'<span style="color:#C43D32">●</span> &lt;{low:g}'
                 f' &nbsp; <span style="color:#A16207">●</span> {low:g}–&lt;{start:g}'
@@ -46,6 +63,8 @@ class AmplitudeRange:
 
 
 class AmplitudeRangeDialog(QDialog):
+    """Dialog to edit the thresholds; emits ``range_applied`` with a validated :class:`AmplitudeRange`."""
+
     range_applied = Signal(object)
 
     def __init__(self, limits: AmplitudeRange, parent=None):
@@ -62,7 +81,7 @@ class AmplitudeRangeDialog(QDialog):
         form.setVerticalSpacing(4)
         self.fields = []
         for column, (label, value) in enumerate(zip(
-            ("Yellow from", "Green from", "Green to"), vars(limits).values(),
+            ("Yellow from", "Green from", "Green to"), vars(limits).values(), strict=True,
         )):
             field = QDoubleSpinBox()
             field.setDecimals(2)
@@ -95,7 +114,7 @@ class AmplitudeRangeDialog(QDialog):
         layout.addWidget(self.buttons)
 
     def _restore(self):
-        for field, value in zip(self.fields, vars(AmplitudeRange()).values()):
+        for field, value in zip(self.fields, vars(AmplitudeRange()).values(), strict=True):
             field.setValue(value)
         self.error.clear()
         self.error.hide()

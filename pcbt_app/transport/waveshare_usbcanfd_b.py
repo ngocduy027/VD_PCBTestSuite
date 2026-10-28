@@ -1,50 +1,37 @@
+"""Waveshare USB-CAN-FD Model B transport over the vendor ``ControlCANFD.dll``."""
+
 from __future__ import annotations
 
+import re
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from math import ceil
-import re
 from pathlib import Path
 from time import monotonic
-from typing import Callable, Protocol
+from typing import Any, Protocol
 
+from pcbt_app.config import DEFAULT_MODEL_B_CHANNEL
 from pcbt_app.models import RawCanFrame
-from pcbt_app.transport.Communication_CAN_CANFD_ModelB import ModelBSerialProxy
 from pcbt_app.transport.base import AbstractCanTransport, CanTransportError
+from pcbt_app.transport.Communication_CAN_CANFD_ModelB import ModelBSerialProxy
 from pcbt_app.transport.waveshare_usbcan_a import (
     WaveshareStreamParser,
     build_waveshare_config_packet,
     encode_waveshare_can_frame,
 )
 
-
-MODEL_B_CHANNEL = "USB-CAN-FD-B Device 0 / CAN2"
+MODEL_B_CHANNEL = DEFAULT_MODEL_B_CHANNEL
 
 
 def scan_model_b_devices() -> list[tuple[int, str]]:
-    """Probe indices 0..63; never initialize or start a CAN channel."""
-    import ctypes
-    from pcbt_app.transport.Communication_CAN_CANFD_ModelB import ZCAN_DEVICE_INFO, ZCAN_USBCANFD_200U
-    proxy = ModelBSerialProxy()
-    proxy._load_library()
-    found = []
-    for index in range(64):
-        handle = proxy._dll.ZCAN_OpenDevice(ZCAN_USBCANFD_200U, index, 0)
-        if not proxy._valid_handle(handle):
-            continue
-        try:
-            if int(proxy._dll.ZCAN_IsDeviceOnLine(handle)) != 2:
-                continue
-            info = ZCAN_DEVICE_INFO()
-            proxy._check_status(proxy._dll.ZCAN_GetDeviceInf(handle, ctypes.byref(info)), "Read device information")
-            serial = bytes(info.str_Serial_Num).split(b"\0", 1)[0].decode("ascii", errors="replace")
-            found.append((index, f"Device {index}" + (f" / SN {serial}" if serial else "")))
-        finally:
-            proxy._check_status(proxy._dll.ZCAN_CloseDevice(handle), "Close scanned device")
-    return found
+    """List online Model B adapters as ``(device_index, label)`` without starting CAN."""
+    return ModelBSerialProxy().scan_online_devices()
 
 
 class ModelBProxy(Protocol):
+    """QSerialPort-like interface of ``ModelBSerialProxy``; lets tests inject a fake device."""
+
     @property
     def last_write_ok(self) -> bool: ...
 
@@ -56,14 +43,14 @@ class ModelBProxy(Protocol):
     def write(self, data: bytes) -> int: ...
     def bytesAvailable(self) -> int: ...
     def waitForReadyRead(self, timeout_ms: int) -> bool: ...
-    def readAll(self) -> object: ...
+    def readAll(self) -> Any: ...  # QByteArray-compatible buffer
     def clear(self, direction: object | None = None) -> bool: ...
 
 
 ProxyFactory = Callable[..., ModelBProxy]
 
 
-@dataclass(slots=True)
+@dataclass(slots=True, weakref_slot=True)
 class WaveshareUsbCanFdBTransport(AbstractCanTransport):
     """AppTestPCB transport for Waveshare USB-CAN-FD Model B.
 
@@ -81,6 +68,7 @@ class WaveshareUsbCanFdBTransport(AbstractCanTransport):
     _pending_frames: deque[RawCanFrame] = field(default_factory=deque, init=False, repr=False)
 
     def connect(self) -> None:
+        """Parse ``channel`` (``USB-CAN-FD-B Device N / CANx``), open the device and configure CAN."""
         if self.is_connected():
             return
 
@@ -109,6 +97,7 @@ class WaveshareUsbCanFdBTransport(AbstractCanTransport):
             raise CanTransportError(f"Failed to open Waveshare USB-CAN-FD-B: {exc}") from exc
 
     def configure_adapter(self) -> bytes:
+        """Send the Model A format config packet; the proxy translates it into DLL calls."""
         packet = build_waveshare_config_packet(self.can_bitrate)
         self._write_packet(packet, "configure")
         return packet
@@ -124,6 +113,7 @@ class WaveshareUsbCanFdBTransport(AbstractCanTransport):
             self._pending_frames.clear()
 
     def reset_stream(self) -> None:
+        """Clear the parser, queued frames and the device receive buffer."""
         self._parser.reset()
         self._pending_frames.clear()
         device = self._device

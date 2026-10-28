@@ -1,6 +1,9 @@
+"""Result cards: per-test PASS/FAIL panels and the metric rows they display."""
+
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from typing import Any
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -17,8 +20,7 @@ from PySide6.QtWidgets import (
 from pcbt_app.protocol.fct_can import fct_state_label
 from pcbt_app.protocol.mit_firmware import status_label
 
-
-RESULT_CARD_SPECS = {
+RESULT_CARD_SPECS: dict[str, dict[str, Any]] = {
     "openloop": {
         "title": "Open-loop",
         "main": (("fct_state", "State"), ("fct_pass_count", "Pass"), ("fct_fail_count", "Fail")),
@@ -93,6 +95,7 @@ CARD_STATUS_STYLES = {
 
 
 def value_label(text: str) -> QLabel:
+    """Selectable, word-wrapped label used for result values."""
     label = QLabel(text)
     label.setObjectName("ValueLabel")
     label.setTextInteractionFlags(Qt.TextSelectableByMouse)
@@ -113,6 +116,7 @@ def _set_card_status(card: dict, state: str) -> None:
 
 
 def make_result_card(test_key: str) -> dict:
+    """Build the result card widget for ``test_key`` from ``RESULT_CARD_SPECS``; returns a dict of its widgets."""
     spec = RESULT_CARD_SPECS[test_key]
     card = QFrame()
     card.setObjectName("ResultCard")
@@ -208,6 +212,7 @@ def make_result_card(test_key: str) -> dict:
 
 
 def set_result_card_running(card: dict) -> None:
+    """Show RUNNING and clear previous values."""
     _set_card_status(card, "running")
     for field in card["fields"].values():
         field.setText("-")
@@ -217,6 +222,7 @@ def set_result_card_running(card: dict) -> None:
 
 
 def reset_result_card(card: dict) -> None:
+    """Return the card to its idle state."""
     _set_card_status(card, "not_run")
     for field in card["fields"].values():
         field.setText("-")
@@ -226,6 +232,7 @@ def reset_result_card(card: dict) -> None:
 
 
 def set_result_card_error(card: dict, message: str) -> None:
+    """Show an exception message on the card."""
     _set_card_status(card, "fail")
     card["failure"].setText(message)
     card["failure"].setVisible(True)
@@ -240,9 +247,10 @@ def _optional_int(value: int | None) -> str:
 def set_result_card(
     card: dict,
     verdict,
-    run_inputs: dict[str, object],
+    run_inputs: Mapping[str, Any],
     format_driver_id: Callable[[int | None], str],
 ) -> None:
+    """Fill the card from a verdict plus the inputs the test was started with."""
     _set_card_status(card, "pass" if verdict.passed else "fail")
     fct_state = (
         fct_state_label(verdict.fct_state)
@@ -288,6 +296,7 @@ GONGWANG_ALMC_FAULT_BITS: tuple[tuple[int, str], ...] = (
 
 
 def gongwang_fault_log_lines(fault_code: int | None) -> tuple[str, ...]:
+    """Console lines (Vietnamese) explaining each set bit of the encoder ALMC fault code."""
     if fault_code is None:
         return ()
     lines = [f"Mã lỗi ALMC bộ mã hóa: {fault_code} (0b{fault_code:08b})"]

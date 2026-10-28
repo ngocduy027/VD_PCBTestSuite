@@ -20,7 +20,6 @@ from pcbt_app.protocol.mit_firmware import MitCommand
 from pcbt_app.services.pcb_test_service import PcbTestService
 from pcbt_app.transport.base import AbstractCanTransport
 
-
 DRIVER_ID = 0x34
 
 

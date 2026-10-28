@@ -1,9 +1,11 @@
+"""Runs GongWang calibration (or reads the stored result) and streams progress updates."""
+
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from threading import Event
 from time import monotonic
-from typing import Callable
 
 from pcbt_app.protocol.fct_can import FCT_HOST_ID
 from pcbt_app.protocol.gw_calibration import (
@@ -20,7 +22,6 @@ from pcbt_app.protocol.gw_calibration import (
 )
 from pcbt_app.services.fct_client import FctClient, FctResponseTimeout
 
-
 GW_CALIBRATION_START_TIMEOUT_S = 0.5
 GW_CALIBRATION_RESULT_FRAGMENT_TIMEOUT_S = 1.0
 GW_CALIBRATION_READ_RESULT_TIMEOUT_S = 1.0
@@ -28,11 +29,15 @@ GW_CALIBRATION_RECEIVE_SLICE_S = 0.2
 
 
 class GwCalibrationCancelled(RuntimeError):
+    """The operator stopped the display; the firmware calibration itself keeps running."""
+
     pass
 
 
 @dataclass(slots=True, frozen=True)
 class GwCalibrationUpdate:
+    """Progress/result message streamed to the GUI; ``terminal`` marks the last one."""
+
     state: str
     message: str
     step: int | None = None
@@ -43,6 +48,8 @@ class GwCalibrationUpdate:
 
 
 class GwCalibrationRunner:
+    """Drives the on-board GongWang calibration over the FCT IDs."""
+
     def __init__(self, transport, *, event_log=None, host_id: int = FCT_HOST_ID) -> None:
         self.client = FctClient(transport, host_id=host_id, event_log=event_log)
 
@@ -53,6 +60,14 @@ class GwCalibrationRunner:
         on_update: Callable[[GwCalibrationUpdate], None],
         stop_event: Event | None = None,
     ) -> GwCalibrationResult:
+        """Start calibration and stream updates until the result is complete.
+
+        There is no overall timeout while the encoder is calibrating (it can take a
+        while); only the START ack and gaps between result fragments are time-limited.
+        Use ``stop_event`` to stop waiting. Raises
+        :class:`~pcbt_app.protocol.gw_calibration.GwCalibrationProtocolError` on a
+        rejected START or a broken result.
+        """
         stop_event = stop_event or Event()
         request = build_gw_calibration_start(driver_id=driver_id, host_id=self.client.host_id)
         assembler = GwCalibrationAssembler()
@@ -172,6 +187,7 @@ class GwCalibrationRunner:
         on_update: Callable[[GwCalibrationUpdate], None],
         stop_event: Event | None = None,
     ) -> GwCalibrationResult:
+        """Read the result stored from the last calibration (no new run)."""
         stop_event = stop_event or Event()
         request = build_gw_calibration_read_result(driver_id=driver_id, host_id=self.client.host_id)
         assembler = GwCalibrationAssembler()

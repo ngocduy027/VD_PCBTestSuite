@@ -1,15 +1,21 @@
+"""Command-line runner for headless/bench use (``pcbt-cli``).
+
+Exit codes: ``0`` PASS, ``2`` FAIL verdict, ``3`` transport/adapter error.
+"""
+
 from __future__ import annotations
 
 import argparse
 import json
+import logging
 import sys
 
 from pcbt_app.config import (
     DEFAULT_BACKEND,
     DEFAULT_BITRATE,
     DEFAULT_CAN_TEST_TIMEOUT_MS,
-    DEFAULT_OPENLOOP_TIMEOUT_MS,
     DEFAULT_MODEL_B_CHANNEL,
+    DEFAULT_OPENLOOP_TIMEOUT_MS,
     DEFAULT_PCAN_CHANNEL,
     DEFAULT_SERIAL_BAUD,
     DEFAULT_WAVESHARE_CHANNEL,
@@ -21,20 +27,25 @@ from pcbt_app.services.pcb_test_service import PcbTestService
 from pcbt_app.transport.factory import create_transport
 from pcbt_app.transport.waveshare_usbcan_a import list_waveshare_com_ports
 
+logger = logging.getLogger(__name__)
+
 
 def default_channel_for_backend(backend: str) -> str:
+    """Default ``--channel`` for a backend: first detected COM port for Model A, else a fixed default."""
     if backend == WAVESHARE_MODEL_B_BACKEND:
         return DEFAULT_MODEL_B_CHANNEL
     if backend == WAVESHARE_BACKEND:
         try:
             ports = list_waveshare_com_ports()
         except Exception:
+            logger.debug("Waveshare COM port listing failed", exc_info=True)
             ports = []
         return ports[0][0] if ports else DEFAULT_WAVESHARE_CHANNEL
     return DEFAULT_PCAN_CHANNEL
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Argument parser for the ``can-test`` and ``openloop-test`` sub-commands."""
     parser = argparse.ArgumentParser(prog="pcbt-cli", description="Run PCB production tests over CAN")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -56,6 +67,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Run one test and print the verdict (``--json`` for machine-readable output); returns the exit code."""
     args = build_parser().parse_args(argv)
     channel = args.channel or default_channel_for_backend(args.backend)
     transport = create_transport(args.backend, channel, args.bitrate, serial_baud=args.serial_baud)
@@ -78,6 +90,7 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 result = service.run_openloop_test(args.timeout_ms, driver_id)
     except Exception as exc:
+        logger.debug("CLI test aborted", exc_info=True)
         print(f"Transport error: {exc}", file=sys.stderr)
         return 3
     finally:

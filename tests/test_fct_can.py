@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections import deque
 from threading import Thread
 from time import sleep
 
@@ -24,7 +23,6 @@ from pcbt_app.protocol.fct_can import (
 )
 from pcbt_app.services.fct_client import FctClient, FctResponseTimeout
 from pcbt_app.transport.fake_bus import FakeCanTransport
-
 
 DRIVER_ID = 0x7F
 

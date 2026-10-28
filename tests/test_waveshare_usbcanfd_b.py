@@ -156,9 +156,10 @@ def test_model_b_selection_is_passed_to_native_proxy():
     transport.disconnect()
 
 def test_scan_model_b_reports_only_online_devices_and_closes_handles(monkeypatch):
-    import pcbt_app.transport.waveshare_usbcanfd_b as module
-    from pcbt_app.transport.Communication_CAN_CANFD_ModelB import ZCAN_DEVICE_INFO
     import ctypes
+
+    import pcbt_app.transport.waveshare_usbcanfd_b as module
+    from pcbt_app.transport.Communication_CAN_CANFD_ModelB import ZCAN_DEVICE_INFO, ModelBSerialProxy
     class Dll:
         def __init__(self):
             self.closed = []
@@ -174,11 +175,6 @@ def test_scan_model_b_reports_only_online_devices_and_closes_handles(monkeypatch
             self.closed.append(handle)
             return 1
     dll = Dll()
-    class Proxy:
-        _dll = dll
-        def _load_library(self): pass
-        def _valid_handle(self, handle): return bool(handle)
-        def _check_status(self, status, operation): assert status == 1
-    monkeypatch.setattr(module, 'ModelBSerialProxy', Proxy)
+    monkeypatch.setattr(ModelBSerialProxy, '_load_library', lambda self: setattr(self, '_dll', dll))
     assert module.scan_model_b_devices() == [(2, 'Device 2 / SN TEST')]
     assert dll.closed == [100, 102]

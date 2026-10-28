@@ -1,13 +1,24 @@
+"""RS485 stress test: the board streams sequenced frames over RS485 via FCT.
+
+The PC captures the stream on a separate serial port while polling FCT
+STATUS over CAN. The verdict comes from the firmware alone (result OK, state
+PASS, ``fail_count == 0``); the PC-side capture (valid/malformed frames,
+sequence gaps, count mismatch) is reported as informational diagnostics.
+"""
+
 from __future__ import annotations
 
+from collections.abc import Callable
 from time import monotonic, sleep
+from typing import TYPE_CHECKING
 
 from pcbt_app.protocol.fct_can import (
-    FCT_COUNT_MAX,
+    FCT_TICKS_PER_MS,
     FctCommandResult,
     FctResponse,
     FctState,
     FctTestId,
+    rs485_max_duration_ms,
 )
 from pcbt_app.protocol.mit_firmware import (
     RS485_STRESS_DEFAULT_DURATION_MS,
@@ -15,23 +26,31 @@ from pcbt_app.protocol.mit_firmware import (
 )
 from pcbt_app.services.fct_client import FctResponseTimeout
 from pcbt_app.services.fct_workflows import _poll_terminal, _stop_and_reconcile
+from pcbt_app.services.progress import ThrottledProgress
 from pcbt_app.transport.base import CanTransportError
-from pcbt_app.transport.rs485_serial import Rs485ParserSnapshot, SerialRs485Transport
+from pcbt_app.transport.rs485_serial import RS485_FRAME_LENGTH, Rs485ParserSnapshot, SerialRs485Transport
 
+if TYPE_CHECKING:
+    from pcbt_app.services.pcb_test_service import PcbTestService, ServiceResult
 
+# Time allowed for in-flight RS485 bytes to arrive after the board stops sending.
 RS485_FINAL_DRAIN_S = 0.100
-RS485_STOP_RECONCILE_S = 2.0
 
 
 def run_rs485_stress_test(
-    service,
+    service: PcbTestService,
     app_timeout_ms: int,
     driver_id: int | None = None,
     rs485_transport: SerialRs485Transport | None = None,
     duration_ms: int = RS485_STRESS_DEFAULT_DURATION_MS,
     period_ticks: int = RS485_STRESS_DEFAULT_PERIOD_TICKS,
-    response_count_callback=None,
-):
+    response_count_callback: Callable[[int], None] | None = None,
+) -> ServiceResult:
+    """Run the FCT RS485 stress test while capturing the stream on ``rs485_transport``.
+
+    ``response_count_callback`` receives the live count of valid frames seen by
+    the PC. See the module docstring for how the verdict is decided.
+    """
     start = monotonic()
     events: list[str] = []
     test_name = "RS485 Stress Test"
@@ -43,7 +62,7 @@ def run_rs485_stress_test(
         return service._result(test_name, False, "RS485 serial is not connected", start, events)
     if not 1 <= period_ticks <= 0xFF:
         return service._result(test_name, False, "RS485 period_ticks must be 1..255", start, events)
-    max_duration_ms = (FCT_COUNT_MAX * period_ticks) // 20
+    max_duration_ms = rs485_max_duration_ms(period_ticks)
     if not 1 <= duration_ms <= max_duration_ms:
         return service._result(
             test_name,
@@ -65,24 +84,15 @@ def run_rs485_stress_test(
     response: FctResponse | None = None
     failure_reason: str | None = None
     capture_started = False
-    last_reported_count = -1
-    last_progress_at = 0.0
     deadline = start + app_timeout_ms / 1000.0
+    progress = ThrottledProgress(response_count_callback)
 
     def publish_received(count: int | None = None, *, force: bool = False) -> None:
-        nonlocal last_reported_count, last_progress_at
-        if response_count_callback is None:
+        if not progress.enabled:
             return
         if count is None:
             count = rs485_transport.capture_snapshot().valid_frame_count
-        if count == last_reported_count:
-            return
-        now = monotonic()
-        if not force and now - last_progress_at < 0.050:
-            return
-        response_count_callback(count)
-        last_reported_count = count
-        last_progress_at = now
+        progress.publish(count, force=force)
 
     try:
         rs485_transport.begin_capture()
@@ -149,7 +159,7 @@ def run_rs485_stress_test(
 
 
 def _finish_rs485_result(
-    service,
+    service: PcbTestService,
     *,
     start: float,
     events: list[str],
@@ -159,7 +169,8 @@ def _finish_rs485_result(
     duration_ms: int,
     period_ticks: int,
     failure_reason: str | None,
-):
+) -> ServiceResult:
+    """Build the RS485 verdict: firmware decides PASS/FAIL; PC capture problems are logged as diagnostics only."""
     reasons: list[str] = []
     if response is None:
         reasons.append("No terminal FCT status received")
@@ -202,7 +213,7 @@ def _finish_rs485_result(
         )
 
     passed = not reasons
-    requested_hz = 20_000.0 / period_ticks
+    requested_hz = FCT_TICKS_PER_MS * 1000.0 / period_ticks
     receive_rate_hz = snapshot.valid_frame_count * 1000.0 / duration_ms
     missing_count = max(0, firmware_count - snapshot.valid_frame_count)
     success_rate = (
@@ -230,7 +241,7 @@ def _finish_rs485_result(
         success_rate_percent=success_rate,
         receive_rate_hz=receive_rate_hz,
         received_byte_count=snapshot.received_byte_count,
-        bytes_per_message=10,
+        bytes_per_message=RS485_FRAME_LENGTH,
         requested_duration_ms=duration_ms,
         period_ticks=period_ticks,
         requested_frequency_hz=requested_hz,

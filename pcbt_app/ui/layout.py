@@ -1,3 +1,5 @@
+"""Builds every widget of the main window and attaches them as ``MainWindow`` attributes."""
+
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
@@ -6,6 +8,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
     QGridLayout,
+    QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -26,6 +29,12 @@ from pcbt_app.config import (
     WAVESHARE_BACKEND,
     WAVESHARE_MODEL_B_BACKEND,
 )
+from pcbt_app.protocol.fct_can import (
+    FCT_MAX_DURATION_MS,
+    FCT_MAX_PERIOD_TICKS,
+    FCT_OPENLOOP_MAX_THETA_STEP_RAD,
+    FCT_OPENLOOP_MIN_THETA_STEP_RAD,
+)
 from pcbt_app.protocol.mit_firmware import (
     CAN_STRESS_DEFAULT_INTERVAL_MS,
     CAN_STRESS_DEFAULT_TOTAL_MESSAGES,
@@ -35,12 +44,6 @@ from pcbt_app.protocol.mit_firmware import (
     RS485_STRESS_DEFAULT_BAUD,
     RS485_STRESS_DEFAULT_DURATION_MS,
     RS485_STRESS_DEFAULT_PERIOD_TICKS,
-)
-from pcbt_app.protocol.fct_can import (
-    FCT_MAX_DURATION_MS,
-    FCT_MAX_PERIOD_TICKS,
-    FCT_OPENLOOP_MAX_THETA_STEP_RAD,
-    FCT_OPENLOOP_MIN_THETA_STEP_RAD,
 )
 from pcbt_app.ui.presets import (
     BITRATE_PRESETS,
@@ -57,6 +60,12 @@ from pcbt_app.ui.result_report import RESULT_CARD_SPECS, make_result_card
 
 
 def build_main_window_ui(self) -> None:
+    """Create all widgets and layouts and store them as attributes on ``self``.
+
+    Called once from ``MainWindow.__init__``. Widget attribute names here are the
+    contract used by ``main_window``, the panel mixins and ``tests/test_gui.py``;
+    rename them in all places together.
+    """
     root = QWidget(self)
     root.setObjectName("AppRoot")
     self.setCentralWidget(root)

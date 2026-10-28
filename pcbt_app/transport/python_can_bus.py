@@ -1,3 +1,5 @@
+"""Transport backed by ``python-can`` (PEAK PCAN and other supported interfaces)."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -8,8 +10,10 @@ from pcbt_app.models import RawCanFrame
 from pcbt_app.transport.base import AbstractCanTransport, CanTransportError
 
 
-@dataclass(slots=True)
+@dataclass(slots=True, weakref_slot=True)
 class PythonCanTransport(AbstractCanTransport):
+    """Wraps a ``can.Bus`` (``backend`` is the python-can interface name, e.g. ``pcan``)."""
+
     backend: str
     channel: str
     bitrate: int

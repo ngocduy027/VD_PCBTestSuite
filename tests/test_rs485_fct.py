@@ -20,7 +20,6 @@ from pcbt_app.services.pcb_test_service import PcbTestService
 from pcbt_app.transport.base import AbstractCanTransport
 from pcbt_app.transport.rs485_serial import FctRs485StreamParser, Rs485ParserSnapshot
 
-
 DRIVER_ID = 0x34
 
 

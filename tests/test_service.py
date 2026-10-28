@@ -5,10 +5,10 @@ import pytest
 from pcbt_app.logging_store import EventLog
 from pcbt_app.models import RawCanFrame
 from pcbt_app.protocol.mit_firmware import (
-    CAN_STRESS_DEFAULT_TOTAL_MESSAGES,
     CAN_INDEX_TEST_ACTIVE,
     CAN_INDEX_TEST_CAN_INTERVAL_MS,
     CAN_INDEX_TEST_CAN_TOTAL_MESSAGES,
+    CAN_STRESS_DEFAULT_TOTAL_MESSAGES,
     MotorTestStatus,
     MotorTestStopReason,
 )
@@ -28,7 +28,6 @@ def make_service(
         EventLog(),
         scan_interval_s=0.0,
         openloop_command_interval_s=0.0,
-        openloop_ready_wait_s=0.0,
         poll_interval_s=poll_interval_s,
         response_timeout_s=response_timeout_s,
     )

@@ -1,3 +1,11 @@
+"""Legacy MIT-style diagnostic protocol of the motor-driver firmware.
+
+Parameters are read/written by 16-bit index (``0x72xx`` diagnostic block) with
+single-read/write frames; a test is selected by writing ``MotorTestId`` to
+``CAN_INDEX_TEST_ACTIVE`` after the unlock key. All multi-byte values are
+little-endian.
+"""
+
 from __future__ import annotations
 
 import struct
@@ -8,6 +16,8 @@ from pcbt_app.protocol.ids import parse_extended_id
 
 
 class MitCommand(IntEnum):
+    """Function code in bits 24..31 of the MIT CAN ID."""
+
     GET_ID = 0x00
     FEEDBACK = 0x02
     ENABLE = 0x03
@@ -20,6 +30,8 @@ class MitCommand(IntEnum):
 
 
 class MotorTestStatus(IntEnum):
+    """Value of ``CAN_INDEX_TEST_STATUS`` while a legacy diagnostic test runs."""
+
     IDLE = 0
     REQUESTED = 1
     WAITING_DRIVER = 2
@@ -30,7 +42,20 @@ class MotorTestStatus(IntEnum):
     BLOCKED_FAULT = 7
 
 
+# Statuses meaning the firmware accepted the test and has not finished yet.
+MOTOR_TEST_ACTIVE_STATUSES = frozenset(
+    {
+        MotorTestStatus.REQUESTED,
+        MotorTestStatus.WAITING_DRIVER,
+        MotorTestStatus.STARTUP_GUARD,
+        MotorTestStatus.RUNNING,
+    }
+)
+
+
 class MotorTestStopReason(IntEnum):
+    """Value of ``CAN_INDEX_TEST_STOP_REASON``; only ``COMPLETED`` counts as a clean finish."""
+
     NONE = 0
     COMPLETED = 1
     CAN_STOP = 2
@@ -96,10 +121,23 @@ CAN_INDEX_TEST_GONGWANG_OUTPUT_SINGLE_TURN_DEG = 0x7260
 CAN_INDEX_TEST_GONGWANG_OUTPUT_TOTAL_TURNS = 0x7261
 CAN_INDEX_TEST_GONGWANG_OUTPUT_TOTAL_DEG = 0x7262
 
-MOTOR_TEST_NONE = 0
-MOTOR_TEST_OPEN_LOOP = 1
-MOTOR_TEST_CAN_STRESS = 2
-MOTOR_TEST_GONGWANG_ENCODER = 4
+class MotorTestId(IntEnum):
+    """Value written to ``CAN_INDEX_TEST_ACTIVE`` to select a legacy diagnostic test."""
+
+    NONE = 0
+    OPEN_LOOP = 1
+    CAN_STRESS = 2
+    GONGWANG_ENCODER = 4
+
+
+MOTOR_TEST_NONE = MotorTestId.NONE
+MOTOR_TEST_OPEN_LOOP = MotorTestId.OPEN_LOOP
+MOTOR_TEST_CAN_STRESS = MotorTestId.CAN_STRESS
+MOTOR_TEST_GONGWANG_ENCODER = MotorTestId.GONGWANG_ENCODER
+# Test IDs whose function-0x1B completion reports are consumed (and not treated
+# as unrelated traffic) while waiting for another response. ID 3 has no legacy
+# workflow in this app but is still recognised so its reports are not dropped.
+DIAG_REPORT_TEST_IDS = frozenset({1, 2, 3, 4})
 DIAG_TEST_UNLOCK_KEY = 0x54455354
 HOST_ID_SCAN_RESPONSE = 0xFE
 
@@ -107,9 +145,15 @@ OPEN_LOOP_DEFAULT_VD = 2.0
 OPEN_LOOP_DEFAULT_VQ = 0.0
 OPEN_LOOP_DEFAULT_THETA_STEP = -0.00083
 OPEN_LOOP_DEFAULT_DURATION_MS = 10_000
+OPEN_LOOP_MAX_ABS_THETA_STEP = 0.002  # rad per control tick, accepted by legacy firmware
+OPEN_LOOP_MIN_DURATION_MS = 100
+OPEN_LOOP_MAX_DURATION_MS = 60_000
+OPEN_LOOP_MAX_ABS_THETA_STEP = 0.002  # rad per control tick, accepted by legacy firmware
 CAN_STRESS_DEFAULT_INTERVAL_MS = 1
 CAN_STRESS_DEFAULT_TOTAL_MESSAGES = 8_000
 CAN_STRESS_DEFAULT_DURATION_MS = CAN_STRESS_DEFAULT_TOTAL_MESSAGES
+# A CAN stress run passes when strictly more than this share of frames arrives.
+CAN_STRESS_MIN_SUCCESS_PERCENT = 95.0
 RS485_STRESS_DEFAULT_PERIOD_TICKS = 1
 RS485_STRESS_DEFAULT_DURATION_MS = 8_000
 RS485_STRESS_DEFAULT_BAUD = 2_500_000
@@ -128,12 +172,14 @@ GONGWANG_MIN_RATE_PERCENT = 80.0
 
 
 def validate_byte(name: str, value: int) -> int:
+    """Return ``value`` unchanged, or raise ``ValueError`` if it does not fit in one byte."""
     if not 0 <= value <= 0xFF:
         raise ValueError(f"{name} must fit in one byte")
     return value
 
 
 def build_mit_arbitration_id(command: int, target_id: int, byte2: int = 0, byte1: int = 0) -> int:
+    """Pack an MIT CAN ID: ``command | byte2 | byte1 | target_id`` (one byte each, MSB first)."""
     validate_byte("command", command)
     validate_byte("target_id", target_id)
     validate_byte("byte2", byte2)
@@ -142,6 +188,7 @@ def build_mit_arbitration_id(command: int, target_id: int, byte2: int = 0, byte1
 
 
 def build_get_id_frame() -> RawCanFrame:
+    """Broadcast ``Get ID`` (target 0); every driver on the bus should answer with its ID."""
     return RawCanFrame(
         arbitration_id=build_mit_arbitration_id(MitCommand.GET_ID, 0),
         data=b"\x00",
@@ -149,6 +196,7 @@ def build_get_id_frame() -> RawCanFrame:
 
 
 def build_scan_id_frame(target_id: int) -> RawCanFrame:
+    """``Get ID`` addressed to one ``target_id``; used by the fallback 0..255 scan."""
     return RawCanFrame(
         arbitration_id=build_mit_arbitration_id(MitCommand.GET_ID, target_id),
         data=b"\x00",
@@ -156,6 +204,7 @@ def build_scan_id_frame(target_id: int) -> RawCanFrame:
 
 
 def build_enable_frame(driver_id: int) -> RawCanFrame:
+    """Enable the motor driver output stage."""
     return RawCanFrame(
         arbitration_id=build_mit_arbitration_id(MitCommand.ENABLE, driver_id),
         data=b"\x00" * 8,
@@ -163,6 +212,7 @@ def build_enable_frame(driver_id: int) -> RawCanFrame:
 
 
 def build_disable_frame(driver_id: int) -> RawCanFrame:
+    """Disable the motor driver output stage."""
     return RawCanFrame(
         arbitration_id=build_mit_arbitration_id(MitCommand.DISABLE, driver_id),
         data=b"\x00" * 8,
@@ -170,6 +220,7 @@ def build_disable_frame(driver_id: int) -> RawCanFrame:
 
 
 def build_passive_report_frame(driver_id: int) -> RawCanFrame:
+    """Ask the driver for one feedback frame; used as stress traffic by the FCT CAN stress test."""
     return RawCanFrame(
         arbitration_id=build_mit_arbitration_id(MitCommand.PASSIVE_REPORT, driver_id),
         data=b"\x00" * 8,
@@ -177,6 +228,7 @@ def build_passive_report_frame(driver_id: int) -> RawCanFrame:
 
 
 def build_single_read_frame(driver_id: int, index: int) -> RawCanFrame:
+    """Read the parameter at ``index``; the reply echoes the index with the value in bytes 4..7."""
     return RawCanFrame(
         arbitration_id=build_mit_arbitration_id(MitCommand.SINGLE_READ, driver_id),
         data=pack_index_payload(index, b"\x00\x00\x00\x00"),
@@ -184,6 +236,7 @@ def build_single_read_frame(driver_id: int, index: int) -> RawCanFrame:
 
 
 def build_single_write_u32_frame(driver_id: int, index: int, value: int) -> RawCanFrame:
+    """Write an unsigned 32-bit parameter (little-endian)."""
     if not 0 <= value <= 0xFFFFFFFF:
         raise ValueError("value must fit in uint32")
     return RawCanFrame(
@@ -193,6 +246,7 @@ def build_single_write_u32_frame(driver_id: int, index: int, value: int) -> RawC
 
 
 def build_single_write_float_frame(driver_id: int, index: int, value: float) -> RawCanFrame:
+    """Write a float32 parameter (little-endian IEEE-754)."""
     return RawCanFrame(
         arbitration_id=build_mit_arbitration_id(MitCommand.SINGLE_WRITE, driver_id),
         data=pack_index_payload(index, struct.pack("<f", value)),
@@ -204,6 +258,7 @@ def build_openloop_default_write_frames(
     theta_step: float = OPEN_LOOP_DEFAULT_THETA_STEP,
     duration_ms: int = OPEN_LOOP_DEFAULT_DURATION_MS,
 ) -> list[RawCanFrame]:
+    """Frames configuring open-loop: fixed Vd/Vq, the given theta step (rad/tick) and duration."""
     return [
         build_single_write_float_frame(driver_id, CAN_INDEX_TEST_OPEN_LOOP_VD, OPEN_LOOP_DEFAULT_VD),
         build_single_write_float_frame(driver_id, CAN_INDEX_TEST_OPEN_LOOP_VQ, OPEN_LOOP_DEFAULT_VQ),
@@ -213,14 +268,17 @@ def build_openloop_default_write_frames(
 
 
 def build_openloop_start_frame(driver_id: int) -> RawCanFrame:
+    """Select the open-loop test; requires the unlock frame to have been sent first."""
     return build_single_write_u32_frame(driver_id, CAN_INDEX_TEST_ACTIVE, MOTOR_TEST_OPEN_LOOP)
 
 
 def build_openloop_unlock_frame(driver_id: int) -> RawCanFrame:
+    """Write ``DIAG_TEST_UNLOCK_KEY`` (ASCII ``TEST``); the firmware refuses to start a test without it."""
     return build_single_write_u32_frame(driver_id, CAN_INDEX_TEST_UNLOCK, DIAG_TEST_UNLOCK_KEY)
 
 
 def build_openloop_stop_frame(driver_id: int) -> RawCanFrame:
+    """Stop any active diagnostic test (writes ``MotorTestId.NONE``)."""
     return build_single_write_u32_frame(driver_id, CAN_INDEX_TEST_ACTIVE, MOTOR_TEST_NONE)
 
 
@@ -229,6 +287,7 @@ def build_can_stress_config_frames(
     interval_ms: int = CAN_STRESS_DEFAULT_INTERVAL_MS,
     total_messages: int = CAN_STRESS_DEFAULT_TOTAL_MESSAGES,
 ) -> list[RawCanFrame]:
+    """Frames configuring the CAN stress interval and message count."""
     return [
         build_single_write_u32_frame(driver_id, CAN_INDEX_TEST_CAN_INTERVAL_MS, interval_ms),
         build_single_write_u32_frame(driver_id, CAN_INDEX_TEST_CAN_TOTAL_MESSAGES, total_messages),
@@ -236,10 +295,12 @@ def build_can_stress_config_frames(
 
 
 def build_can_stress_start_frame(driver_id: int) -> RawCanFrame:
+    """Select the CAN stress test; requires the unlock frame first."""
     return build_single_write_u32_frame(driver_id, CAN_INDEX_TEST_ACTIVE, MOTOR_TEST_CAN_STRESS)
 
 
 def build_can_stress_stop_frame(driver_id: int) -> RawCanFrame:
+    """Stop any active diagnostic test (writes ``MotorTestId.NONE``)."""
     return build_single_write_u32_frame(driver_id, CAN_INDEX_TEST_ACTIVE, MOTOR_TEST_NONE)
 
 
@@ -247,18 +308,22 @@ def build_gongwang_config_frames(
     driver_id: int,
     duration_ms: int = GONGWANG_DEFAULT_DURATION_MS,
 ) -> list[RawCanFrame]:
+    """Frames configuring the GongWang test duration."""
     return [build_single_write_u32_frame(driver_id, CAN_INDEX_TEST_GONGWANG_DURATION_MS, duration_ms)]
 
 
 def build_gongwang_start_frame(driver_id: int) -> RawCanFrame:
+    """Select the GongWang encoder test; requires the unlock frame first."""
     return build_single_write_u32_frame(driver_id, CAN_INDEX_TEST_ACTIVE, MOTOR_TEST_GONGWANG_ENCODER)
 
 
 def build_gongwang_stop_frame(driver_id: int) -> RawCanFrame:
+    """Stop any active diagnostic test (writes ``MotorTestId.NONE``)."""
     return build_single_write_u32_frame(driver_id, CAN_INDEX_TEST_ACTIVE, MOTOR_TEST_NONE)
 
 
 def pack_index_payload(index: int, value_le_4: bytes) -> bytes:
+    """8-byte read/write payload: ``index`` (u16 LE), two zero bytes, then the 4-byte LE value."""
     if not 0 <= index <= 0xFFFF:
         raise ValueError("index must fit in uint16")
     if len(value_le_4) != 4:
@@ -267,12 +332,14 @@ def pack_index_payload(index: int, value_le_4: bytes) -> bytes:
 
 
 def parse_mit_id(frame: RawCanFrame) -> CanIdFields | None:
+    """Decode the CAN ID of an extended frame; ``None`` for standard-ID frames."""
     if not frame.is_extended_id:
         return None
     return parse_extended_id(frame.arbitration_id)
 
 
 def parse_scan_response(frame: RawCanFrame) -> int | None:
+    """Driver ID from a ``Get ID`` reply (host ID ``0xFE``), else ``None``."""
     fields = parse_mit_id(frame)
     if fields is None:
         return None
@@ -282,11 +349,13 @@ def parse_scan_response(frame: RawCanFrame) -> int | None:
 
 
 def is_feedback_response(frame: RawCanFrame, driver_id: int) -> bool:
+    """True if ``frame`` is a feedback frame from ``driver_id``."""
     fields = parse_mit_id(frame)
     return fields is not None and fields.function_code == MitCommand.FEEDBACK and fields.driver_id == driver_id
 
 
 def read_param_value_bytes(frame: RawCanFrame, driver_id: int) -> bytes | None:
+    """The 4 value bytes of a single-read reply from ``driver_id``, else ``None``."""
     fields = parse_mit_id(frame)
     if fields is None:
         return None
@@ -298,16 +367,19 @@ def read_param_value_bytes(frame: RawCanFrame, driver_id: int) -> bytes | None:
 
 
 def read_param_value_u32(frame: RawCanFrame, driver_id: int) -> int | None:
+    """Single-read reply value as uint32, or ``None`` if the frame is not a matching reply."""
     value = read_param_value_bytes(frame, driver_id)
     return None if value is None else int.from_bytes(value, "little")
 
 
 def read_param_value_float(frame: RawCanFrame, driver_id: int) -> float | None:
+    """Single-read reply value as float32, or ``None`` if the frame is not a matching reply."""
     value = read_param_value_bytes(frame, driver_id)
     return None if value is None else struct.unpack("<f", value)[0]
 
 
 def parse_can_stress_frame(frame: RawCanFrame, driver_id: int | None = None) -> CanStressReportFrame | None:
+    """Decode a stress frame (function ``0x1C``): sequence (u32 LE) and board elapsed ms (u32 LE)."""
     fields = parse_mit_id(frame)
     if fields is None:
         return None
@@ -329,6 +401,11 @@ def parse_diagnostic_test_report(
     driver_id: int | None = None,
     test_id: int | None = None,
 ) -> DiagnosticTestReportFrame | None:
+    """Decode a test completion report (function ``0x1B``).
+
+    Payload: test ID (u16 LE), status, stop reason, elapsed ms (u32 LE).
+    ``driver_id``/``test_id`` filter the frame when given.
+    """
     fields = parse_mit_id(frame)
     if fields is None or fields.function_code != MitCommand.DIAG_TEST_REPORT:
         return None
@@ -349,6 +426,11 @@ def parse_diagnostic_test_report(
 
 
 def parse_can_stress_report(frame: RawCanFrame, driver_id: int | None = None) -> CanStressReportFrame | None:
+    """Decode a function-``0x1B`` frame as a CAN stress report (sequence + elapsed ms).
+
+    Shares the function code with :func:`parse_diagnostic_test_report`; callers
+    try that parser first.
+    """
     fields = parse_mit_id(frame)
     if fields is None:
         return None
@@ -366,6 +448,7 @@ def parse_can_stress_report(frame: RawCanFrame, driver_id: int | None = None) ->
 
 
 def status_label(value: int | None) -> str:
+    """Display name of a :class:`MotorTestStatus` value, ``-`` for ``None``."""
     if value is None:
         return "-"
     try:
@@ -375,6 +458,7 @@ def status_label(value: int | None) -> str:
 
 
 def stop_reason_label(value: int | None) -> str:
+    """Display name of a :class:`MotorTestStopReason` value, ``-`` for ``None``."""
     if value is None:
         return "-"
     try:

@@ -26,7 +26,6 @@ from pcbt_app.services.gongwang_encoder_test import GONGWANG_RESULT_FIELDS
 from pcbt_app.services.pcb_test_service import PcbTestService
 from pcbt_app.transport.fake_bus import FakeCanTransport
 
-
 DRIVER_ID = 0x34
 HOST_ID = 0xA5
 

@@ -1,4 +1,9 @@
+import sys
+
 from PyInstaller.utils.hooks import collect_submodules
+
+sys.path.insert(0, SPECPATH)
+from pcbt_app import APP_TITLE  # noqa: E402
 
 hiddenimports = collect_submodules("can.interfaces") + [
     "serial",
@@ -35,7 +40,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name="VD_PCBTestSuite_V1.2",
+    name=APP_TITLE,
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

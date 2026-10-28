@@ -1,3 +1,5 @@
+"""Guards against starting the same test twice while it is still running."""
+
 from __future__ import annotations
 
 from threading import Lock
@@ -6,11 +8,14 @@ from pcbt_app.services.pcb_test_service import ServiceResult
 
 
 class TestRunner:
+    """Tracks running test keys so the same test cannot be started twice concurrently."""
+
     def __init__(self) -> None:
         self._lock = Lock()
         self._active: set[str] = set()
 
     def run(self, test_key: str, func, *args, **kwargs) -> ServiceResult:
+        """Call ``func`` under ``test_key``; raises ``RuntimeError`` if that key is already running."""
         with self._lock:
             if test_key in self._active:
                 raise RuntimeError(f"{test_key} is already running")

@@ -12,5 +12,4 @@ dist/
 # Release binaries, firmware images and generated deliverables (kept outside source control)
 archive/
 output/
-.codex_tmp/
 .claude/settings.local.json

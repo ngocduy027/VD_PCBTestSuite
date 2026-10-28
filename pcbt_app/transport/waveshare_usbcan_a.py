@@ -1,8 +1,19 @@
+"""Waveshare USB-CAN-A (CH340/CH341 serial) transport.
+
+Speaks Waveshare's serial-to-CAN protocol: commands and CAN frames are sent as
+20-byte ``AA 55`` packets ending in an additive checksum. Received bytes may be
+either those fixed packets or variable-length ``AA <type> <id> <data> 55``
+frames; :class:`WaveshareStreamParser` accepts both and resynchronises after
+corrupted bytes. The Model B transport reuses
+the same packet codec so the service layer stays adapter-agnostic.
+"""
+
 from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass, field
 from time import monotonic, sleep
+from typing import Any
 
 try:
     import serial
@@ -16,7 +27,6 @@ except ImportError:  # pragma: no cover - exercised only in broken installs
 from pcbt_app.config import DEFAULT_SERIAL_BAUD
 from pcbt_app.models import RawCanFrame
 from pcbt_app.transport.base import AbstractCanTransport, CanTransportError
-
 
 WAVESHARE_FIXED_LENGTH_PROTOCOL = 0x02
 WAVESHARE_EXTENDED_FRAME = 0x02
@@ -45,6 +55,8 @@ class WaveshareProtocolError(CanTransportError):
 
 @dataclass(slots=True, frozen=True)
 class WaveshareParserStats:
+    """Counts of stream-recovery events since the last :meth:`WaveshareStreamParser.take_stats`."""
+
     valid_packets: int = 0
     decoded_frames: int = 0
     malformed_candidates: int = 0
@@ -56,6 +68,7 @@ class WaveshareParserStats:
     max_consecutive_malformed: int = 0
 
     def summary(self) -> str | None:
+        """One-line warning for the console, or ``None`` if the stream was clean."""
         if self.malformed_candidates == 0:
             return None
         return (
@@ -70,15 +83,18 @@ class WaveshareParserStats:
 
 
 def require_pyserial() -> None:
+    """Raise :class:`CanTransportError` if pyserial is not installed."""
     if serial is None:
         raise CanTransportError("pyserial missing; install pyserial>=3.5 to use Waveshare USB-CAN-A")
 
 
 def supported_bitrates_text() -> str:
+    """Comma-separated list of CAN bitrates the adapter supports."""
     return ", ".join(str(rate) for rate in sorted(WAVESHARE_CAN_BITRATE_CODES, reverse=True))
 
 
 def build_waveshare_config_packet(can_bitrate: int) -> bytes:
+    """20-byte configuration packet: fixed-length protocol, extended frames, accept-all filter, normal mode, auto-retransmit off."""
     try:
         bitrate_code = WAVESHARE_CAN_BITRATE_CODES[can_bitrate]
     except KeyError as exc:
@@ -100,10 +116,12 @@ def build_waveshare_config_packet(can_bitrate: int) -> bytes:
 
 
 def format_waveshare_packet(packet: bytes) -> str:
+    """Hex string of a packet, for display."""
     return packet.hex().upper()
 
 
 def encode_waveshare_can_frame(frame: RawCanFrame) -> bytes:
+    """Encode an extended-ID frame as a 20-byte ``AA 55`` data packet (ID LE, payload padded to 8, checksum)."""
     if len(frame.data) > 8:
         raise WaveshareProtocolError("Waveshare USB-CAN-A can encode at most 8 payload bytes")
     if not frame.is_extended_id:
@@ -126,23 +144,28 @@ def encode_waveshare_can_frame(frame: RawCanFrame) -> bytes:
 
 
 class WaveshareStreamParser:
+    """Incremental decoder for the adapter's serial byte stream (see module docstring)."""
+
     def __init__(self) -> None:
         self._buffer = bytearray()
         self._stats = WaveshareParserStats()
         self._consecutive_malformed = 0
 
     def reset(self) -> None:
+        """Drop buffered bytes and statistics."""
         self._buffer.clear()
         self._stats = WaveshareParserStats()
         self._consecutive_malformed = 0
 
     def take_stats(self) -> WaveshareParserStats:
+        """Return and reset the recovery statistics."""
         stats = self._stats
         self._stats = WaveshareParserStats()
         self._consecutive_malformed = 0
         return stats
 
     def feed(self, data: bytes) -> list[RawCanFrame]:
+        """Add received bytes and return every complete CAN frame decoded so far."""
         self._buffer.extend(data)
         frames: list[RawCanFrame] = []
 
@@ -271,21 +294,25 @@ class WaveshareStreamParser:
 
 
 def list_waveshare_com_ports() -> list[tuple[str, str]]:
+    """``(device, description)`` for every serial port, for the adapter port picker."""
     require_pyserial()
     assert list_ports is not None
     return [(port.device, port.description) for port in list_ports.comports()]
 
 
-@dataclass(slots=True)
+@dataclass(slots=True, weakref_slot=True)
 class WaveshareUsbCanATransport(AbstractCanTransport):
+    """Waveshare USB-CAN-A over its CH340/CH341 virtual COM port."""
+
     channel: str
     can_bitrate: int
     serial_baud: int = DEFAULT_SERIAL_BAUD
-    _serial: object | None = None
+    _serial: Any = None  # serial.Serial once connected; Any because pyserial is optional
     _parser: WaveshareStreamParser = field(default_factory=WaveshareStreamParser)
     _pending_frames: deque[RawCanFrame] = field(default_factory=deque)
 
     def connect(self) -> None:
+        """Open the COM port and send the configuration packet."""
         require_pyserial()
         if self._serial is not None:
             return
@@ -316,6 +343,7 @@ class WaveshareUsbCanATransport(AbstractCanTransport):
             raise CanTransportError(f"Failed to open Waveshare USB-CAN-A on {self.channel}: {message}") from exc
 
     def configure_adapter(self) -> bytes:
+        """(Re)send the configuration packet for ``can_bitrate``; returns the packet."""
         if self._serial is None:
             raise CanTransportError("CAN adapter is not connected")
         config_packet = build_waveshare_config_packet(self.can_bitrate)
@@ -337,10 +365,12 @@ class WaveshareUsbCanATransport(AbstractCanTransport):
             self.reset_stream()
 
     def reset_stream(self) -> None:
+        """Discard partially parsed bytes and queued frames."""
         self._parser.reset()
         self._pending_frames.clear()
 
     def take_parser_stats(self) -> WaveshareParserStats:
+        """Return and reset the stream parser's recovery statistics."""
         return self._parser.take_stats()
 
     def is_connected(self) -> bool:

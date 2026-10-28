@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pcbt-app"
-version = "1.2.0"
+dynamic = ["version"]
 description = "Windows CAN test application for motor PCB production and bench test"
 readme = "README.md"
 requires-python = ">=3.14"
 license = { text = "Proprietary" }
 authors = [
-  { name = "OpenAI Codex" }
+  { name = "VinD" }
 ]
 dependencies = [
   "python-can>=4.4,<5",
@@ -22,6 +22,8 @@ dependencies = [
 dev = [
   "pytest>=8.3,<9",
   "pytest-qt>=4.4,<5",
+  "ruff>=0.6",
+  "mypy>=1.11",
   "PyInstaller>=6.10,<7",
 ]
 
@@ -36,5 +38,38 @@ pythonpath = ["."]
 [tool.setuptools]
 include-package-data = true
 
+[tool.setuptools.dynamic]
+version = { attr = "pcbt_app.__version__" }
+
 [tool.setuptools.packages.find]
 include = ["pcbt_app*"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py314"
+extend-exclude = ["build", "dist", "archive", "output"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = [
+  "E501",  # long UI/test lines are formatted by hand; enforce via review instead
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["pcbt_app"]
+
+[tool.ruff.lint.per-file-ignores]
+# Vendor-style ctypes bindings mirror the C API names of ControlCANFD.dll.
+"pcbt_app/transport/Communication_CAN_CANFD_ModelB.py" = ["N", "UP"]
+
+[tool.mypy]
+python_version = "3.14"
+packages = ["pcbt_app"]
+ignore_missing_imports = true
+check_untyped_defs = true
+
+[[tool.mypy.overrides]]
+# Widgets are attached to MainWindow dynamically by ui/layout.py and the panel
+# mixins read them through ``self``; mypy cannot see those attributes.
+module = ["pcbt_app.ui.*"]
+disable_error_code = ["attr-defined"]

@@ -1,5 +1,10 @@
 # PCB Test PC App Standalone Brief
 
+> **Historical document.** This is the original brief for the first version of
+> the app. Its `0x1B` command / `0x1C` result protocol is no longer
+> implemented; the app now uses the FCT and GongWang protocols described in
+> `docs/HANDOVER.md`. Keep this file for background only.
+
 ## Purpose
 
 Build a Windows PC application for PCB production and bench testing of a motor driver board over CAN.

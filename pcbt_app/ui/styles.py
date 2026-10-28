@@ -1,8 +1,10 @@
-from __future__ import annotations
+"""Qt stylesheets and colour tables for the main window."""
 
+from __future__ import annotations
 
 from pcbt_app.ui.amplitude_range import AmplitudeRange
 
+DEFAULT_AMPLITUDE_RANGE = AmplitudeRange()
 
 BANNER_STYLES: dict[str, tuple[str, str, str]] = {
     "idle": ("IDLE", "#D7DEE2", "#2F3E46"),
@@ -20,8 +22,9 @@ AMPLITUDE_COLORS = {
 
 
 def amplitude_value_stylesheet(
-    value_mv: float | None, limits: AmplitudeRange = AmplitudeRange()
+    value_mv: float | None, limits: AmplitudeRange = DEFAULT_AMPLITUDE_RANGE
 ) -> str:
+    """Stylesheet colouring an amplitude field by ``limits``; neutral when the value is ``None``."""
     if value_mv is None:
         background, color = AMPLITUDE_COLORS["neutral"]
     elif value_mv < limits.yellow_start or value_mv > limits.green_end:
@@ -34,6 +37,7 @@ def amplitude_value_stylesheet(
 
 
 def main_window_stylesheet() -> str:
+    """Application-wide Qt stylesheet."""
     return """
             QWidget#AppRoot {
                 background: #ECEFF1;
@@ -223,6 +227,7 @@ def main_window_stylesheet() -> str:
 
 
 def banner_stylesheet(background: str, color: str) -> str:
+    """Stylesheet for the overall PASS/FAIL/RUNNING banner."""
     return (
         f"background: {background}; color: {color}; min-height: 44px; border-radius: 5px; "
         "font-size: 18pt; font-weight: 800; letter-spacing: 0px;"

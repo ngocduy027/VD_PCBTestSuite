@@ -1,31 +1,47 @@
+"""GongWang encoder calibration messages carried on the FCT request/response IDs.
+
+The firmware runs calibration on board; the PC sends START, then receives
+progress frames and a fragmented result record per encoder ring (motor and
+output), or an encoder error report.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import IntEnum
 
 from pcbt_app.models import RawCanFrame
-from pcbt_app.protocol.fct_can import FCT_HOST_ID, build_fct_id, parse_fct_id
+from pcbt_app.protocol.fct_can import (
+    FCT_HOST_ID,
+    FCT_REQUEST_FUNCTION,
+    FCT_RESPONSE_FUNCTION,
+    build_fct_id,
+    parse_fct_id,
+)
+from pcbt_app.protocol.gw_sincos import GW_MOTOR_RESOLUTION, GW_OUTPUT_RESOLUTION, GW_SIGNAL_SCALE_V
 
-
-GW_CALIBRATION_REQUEST_FUNCTION = 0x1E
-GW_CALIBRATION_RESPONSE_FUNCTION = 0x1F
+# Calibration rides on the FCT request/response function codes.
+GW_CALIBRATION_REQUEST_FUNCTION = FCT_REQUEST_FUNCTION
+GW_CALIBRATION_RESPONSE_FUNCTION = FCT_RESPONSE_FUNCTION
 GW_CALIBRATION_START_OPCODE = 0x10
 GW_CALIBRATION_PROGRESS_OPCODE = 0x12
 GW_CALIBRATION_RESULT_OPCODE = 0x13
 GW_CALIBRATION_DLC = 8
 GW_CALIBRATION_COMMAND = 0x76
 GW_CALIBRATION_SUCCESS_STEP = 0x11
-GW_MOTOR_RESOLUTION = 131_072
-GW_OUTPUT_RESOLUTION = 524_288
 
 
 class GwCalibrationStartResult(IntEnum):
+    """Firmware reply to calibration START (ack byte 0)."""
+
     ACCEPTED = 0x00
     BUSY = 0x01
     NOT_INITIALIZED = 0x02
 
 
 class GwCalibrationOutcome(IntEnum):
+    """Overall calibration outcome (byte 0 of every result fragment)."""
+
     PASS = 0x01
     ENCODER_FAILURE = 0x02
     UART_FAILURE = 0x03
@@ -33,6 +49,8 @@ class GwCalibrationOutcome(IntEnum):
 
 
 class GwCalibrationRecordType(IntEnum):
+    """Which record a result fragment belongs to (byte 1 of the fragment)."""
+
     NONE = 0x00
     MOTOR = 0x01
     OUTPUT = 0x02
@@ -40,17 +58,28 @@ class GwCalibrationRecordType(IntEnum):
 
 
 class GwCalibrationProtocolError(ValueError):
+    """A calibration frame matched by ID but its content is invalid (bad XOR, order, length...)."""
+
     pass
 
 
 @dataclass(slots=True, frozen=True)
 class GwCalibrationStartAck:
+    """Decoded START acknowledgement: result plus the firmware's internal state byte."""
+
     result: GwCalibrationStartResult
     firmware_state: int
 
 
 @dataclass(slots=True, frozen=True)
 class GwCalibrationProgress:
+    """Progress frame relayed from the encoder during calibration.
+
+    Bytes 0..4 are the encoder's own message: command echo ``0x76``, request
+    flag, step, encoder status and an XOR checksum over the five bytes.
+    ``step == GW_CALIBRATION_SUCCESS_STEP`` means the encoder finished.
+    """
+
     request: int
     step: int
     encoder_status: int
@@ -58,6 +87,12 @@ class GwCalibrationProgress:
 
 @dataclass(slots=True, frozen=True)
 class GwCalibrationFragment:
+    """One 8-byte result frame: ``outcome, record_type, index, payload[5]``.
+
+    Records longer than 5 bytes are split across consecutive indices and
+    reassembled by :class:`GwCalibrationAssembler`.
+    """
+
     outcome: GwCalibrationOutcome
     record_type: GwCalibrationRecordType
     index: int
@@ -66,6 +101,13 @@ class GwCalibrationFragment:
 
 @dataclass(slots=True, frozen=True)
 class GwCalibrationResultRecord:
+    """Calibration result for one encoder ring (motor or output).
+
+    "master"/"slave" are the encoder's two sin/cos channels. Amplitudes and
+    centres are in volts, ``*_sin_cos_percent`` is min/max amplitude ratio, and
+    ``relative_deviation_deg`` is the angle offset between the channels.
+    """
+
     master_sin_amplitude_v: float
     master_sin_center_v: float
     master_cos_amplitude_v: float
@@ -82,6 +124,8 @@ class GwCalibrationResultRecord:
 
 @dataclass(slots=True, frozen=True)
 class GwCalibrationEncoderError:
+    """Encoder-reported failure: an error code and raw value per ring (see :func:`describe_encoder_error`)."""
+
     motor_code: int
     motor_value: int
     output_code: int
@@ -90,6 +134,8 @@ class GwCalibrationEncoderError:
 
 @dataclass(slots=True, frozen=True)
 class GwCalibrationResult:
+    """Fully reassembled calibration result; which fields are set depends on ``outcome``."""
+
     outcome: GwCalibrationOutcome
     motor: GwCalibrationResultRecord | None = None
     output: GwCalibrationResultRecord | None = None
@@ -109,6 +155,7 @@ ERROR_CODE_MESSAGES = {
 
 
 def build_gw_calibration_start(*, driver_id: int, host_id: int = FCT_HOST_ID) -> RawCanFrame:
+    """Request that the firmware start on-board encoder calibration (payload all zero)."""
     return RawCanFrame(
         build_fct_id(
             GW_CALIBRATION_REQUEST_FUNCTION,
@@ -122,6 +169,7 @@ def build_gw_calibration_start(*, driver_id: int, host_id: int = FCT_HOST_ID) ->
 
 
 def build_gw_calibration_read_result(*, driver_id: int, host_id: int = FCT_HOST_ID) -> RawCanFrame:
+    """Request the result stored by the last calibration without running a new one."""
     return RawCanFrame(
         build_fct_id(
             GW_CALIBRATION_REQUEST_FUNCTION,
@@ -141,6 +189,7 @@ def _matching_payload(
     driver_id: int,
     host_id: int,
 ) -> bytes | None:
+    """Payload of an 8-byte calibration response with ``opcode`` from ``driver_id`` to ``host_id``, else ``None``."""
     if not frame.is_extended_id or len(frame.data) != GW_CALIBRATION_DLC:
         return None
     fields = parse_fct_id(frame.arbitration_id)
@@ -160,6 +209,7 @@ def parse_gw_calibration_start_ack(
     driver_id: int,
     host_id: int = FCT_HOST_ID,
 ) -> GwCalibrationStartAck | None:
+    """Decode a START acknowledgement for ``driver_id``; ``None`` if the frame is unrelated."""
     data = _matching_payload(
         frame,
         opcode=GW_CALIBRATION_START_OPCODE,
@@ -183,6 +233,7 @@ def parse_gw_calibration_progress(
     driver_id: int,
     host_id: int = FCT_HOST_ID,
 ) -> GwCalibrationProgress | None:
+    """Decode and validate a progress frame; ``None`` if unrelated, raises on bad content."""
     data = _matching_payload(
         frame,
         opcode=GW_CALIBRATION_PROGRESS_OPCODE,
@@ -207,6 +258,7 @@ def parse_gw_calibration_fragment(
     driver_id: int,
     host_id: int = FCT_HOST_ID,
 ) -> GwCalibrationFragment | None:
+    """Decode one result fragment; ``None`` if unrelated, raises on unknown metadata."""
     data = _matching_payload(
         frame,
         opcode=GW_CALIBRATION_RESULT_OPCODE,
@@ -224,6 +276,13 @@ def parse_gw_calibration_fragment(
 
 
 def decode_gw_calibration_record(raw: bytes, *, resolution: int) -> GwCalibrationResultRecord:
+    """Decode a 22-byte encoder result record.
+
+    Layout: ``0x76``, request (``0x02`` motor / ``0x04`` output), nine signed
+    16-bit LE values (master sin amp/centre, master cos amp/centre, slave sin
+    amp/centre, slave cos amp/centre, deviation), status byte, XOR checksum.
+    ``resolution`` (counts per turn) converts the deviation to degrees.
+    """
     expected_request = 0x02 if resolution == GW_MOTOR_RESOLUTION else 0x04
     if len(raw) != 22 or raw[0] != GW_CALIBRATION_COMMAND or raw[1] != expected_request:
         raise GwCalibrationProtocolError("invalid calibration result record header or length")
@@ -250,6 +309,7 @@ def decode_gw_calibration_record(raw: bytes, *, resolution: int) -> GwCalibratio
 
 
 def decode_gw_calibration_error(raw: bytes) -> GwCalibrationEncoderError:
+    """Decode the 9-byte error record: ``0x76 0x0A``, motor code + u16 value, output code + u16 value, XOR."""
     if len(raw) != 9 or raw[0] != GW_CALIBRATION_COMMAND or raw[1] != 0x0A:
         raise GwCalibrationProtocolError("invalid calibration error record header or length")
     if _xor(raw) != 0:
@@ -263,6 +323,13 @@ def decode_gw_calibration_error(raw: bytes) -> GwCalibrationEncoderError:
 
 
 class GwCalibrationAssembler:
+    """Reassembles result fragments into a :class:`GwCalibrationResult`.
+
+    Expected sequence by outcome: PASS -> MOTOR (5 fragments) then OUTPUT (5);
+    ENCODER_FAILURE -> ERROR (2); UART/open-loop failure -> NONE (1). Any gap,
+    reordering or outcome change raises :class:`GwCalibrationProtocolError`.
+    """
+
     def __init__(self) -> None:
         self._outcome: GwCalibrationOutcome | None = None
         self._record_type: GwCalibrationRecordType | None = None
@@ -271,9 +338,11 @@ class GwCalibrationAssembler:
 
     @property
     def started(self) -> bool:
+        """True after the first fragment has been accepted."""
         return self._outcome is not None
 
     def add(self, fragment: GwCalibrationFragment) -> GwCalibrationResult | None:
+        """Add the next fragment; returns the result once complete, otherwise ``None``."""
         if self._outcome is None:
             self._outcome = fragment.outcome
         elif fragment.outcome != self._outcome:
@@ -326,6 +395,7 @@ class GwCalibrationAssembler:
 
 
 def describe_encoder_error(code: int, value: int) -> str:
+    """Operator-facing (Vietnamese) description of an encoder error code with its value converted to units."""
     message = ERROR_CODE_MESSAGES.get(code)
     if message is None:
         return f"Lỗi không xác định 0x{code:02X} (giá trị raw: {value})"
@@ -353,11 +423,11 @@ def _xor(data: bytes) -> int:
 
 
 def _amplitude_v(raw: int) -> float:
-    return raw * 0.5 * 3.657 / 8192.0
+    return raw * 0.5 * GW_SIGNAL_SCALE_V
 
 
 def _center_v(raw: int) -> float:
-    return raw * 3.657 / 8192.0
+    return raw * GW_SIGNAL_SCALE_V
 
 
 def _ratio_percent(sin_amplitude: int, cos_amplitude: int) -> float:

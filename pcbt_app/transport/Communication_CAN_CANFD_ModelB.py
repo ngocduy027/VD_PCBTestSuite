@@ -20,21 +20,25 @@ bytes are supported.
 
 from __future__ import annotations
 
-from collections import deque
 import ctypes
 import inspect
-from pathlib import Path
+import logging
 import struct
 import sys
 import threading
 import time
+from collections import deque
+from pathlib import Path
+from typing import Any
 
 from PySide6.QtCore import QByteArray, QObject, Signal, Slot
+
+logger = logging.getLogger(__name__)
 
 try:
     from Communication_CAN import USB_CAN_A
 except ImportError:
-    class USB_CAN_A(QObject):
+    class USB_CAN_A(QObject):  # type: ignore[no-redef]
         """Placeholder used when the legacy VinD Model A module is absent."""
 
         def __init__(self, *args, **kwargs):
@@ -59,6 +63,9 @@ ZCAN_USBCANFD_200U = 41
 TYPE_CAN = 0
 TYPE_CANFD = 1
 
+# The vendor DLL has no enumeration API; device indices 0..N-1 are probed.
+MAX_SCAN_DEVICES = 64
+
 CAN_EFF_FLAG = 0x80000000
 CAN_RTR_FLAG = 0x40000000
 CAN_ERR_FLAG = 0x20000000
@@ -67,6 +74,8 @@ CAN_SFF_MASK = 0x7FF
 
 
 class ZCAN_CAN_FRAME(ctypes.Structure):
+    """ctypes mirror of the vendor ``ZCAN_CAN_FRAME`` struct (see docs/USB-CAN-FD-B-API-Manual.pdf)."""
+
     _fields_ = [
         ("can_id", UINT),
         ("can_dlc", BYTE),
@@ -78,6 +87,8 @@ class ZCAN_CAN_FRAME(ctypes.Structure):
 
 
 class ZCAN_CANFD_FRAME(ctypes.Structure):
+    """ctypes mirror of the vendor ``ZCAN_CANFD_FRAME`` struct."""
+
     _fields_ = [
         ("can_id", UINT),
         ("len", BYTE),
@@ -89,6 +100,8 @@ class ZCAN_CANFD_FRAME(ctypes.Structure):
 
 
 class ZCAN_CAN_INIT_CONFIG(ctypes.Structure):
+    """ctypes mirror of the vendor classic-CAN init config."""
+
     _fields_ = [
         ("acc_code", UINT),
         ("acc_mask", UINT),
@@ -101,6 +114,8 @@ class ZCAN_CAN_INIT_CONFIG(ctypes.Structure):
 
 
 class ZCAN_CANFD_INIT_CONFIG(ctypes.Structure):
+    """ctypes mirror of the vendor CAN-FD init config."""
+
     _fields_ = [
         ("acc_code", UINT),
         ("acc_mask", UINT),
@@ -115,6 +130,8 @@ class ZCAN_CANFD_INIT_CONFIG(ctypes.Structure):
 
 
 class ZCAN_INIT_CONFIG_UNION(ctypes.Union):
+    """Union of the classic and FD init configs, as in the vendor header."""
+
     _fields_ = [
         ("can", ZCAN_CAN_INIT_CONFIG),
         ("canfd", ZCAN_CANFD_INIT_CONFIG),
@@ -122,6 +139,8 @@ class ZCAN_INIT_CONFIG_UNION(ctypes.Union):
 
 
 class ZCAN_CHANNEL_INIT_CONFIG(ctypes.Structure):
+    """ctypes mirror of ``ZCAN_CHANNEL_INIT_CONFIG`` (``can_type`` selects the union member)."""
+
     _anonymous_ = ("config",)
     _fields_ = [
         ("can_type", UINT),
@@ -130,6 +149,8 @@ class ZCAN_CHANNEL_INIT_CONFIG(ctypes.Structure):
 
 
 class ZCAN_TRANSMIT_DATA(ctypes.Structure):
+    """ctypes mirror of ``ZCAN_Transmit_Data``."""
+
     _fields_ = [
         ("frame", ZCAN_CAN_FRAME),
         ("transmit_type", UINT),
@@ -137,6 +158,8 @@ class ZCAN_TRANSMIT_DATA(ctypes.Structure):
 
 
 class ZCAN_RECEIVE_DATA(ctypes.Structure):
+    """ctypes mirror of ``ZCAN_Receive_Data``."""
+
     _fields_ = [
         ("frame", ZCAN_CAN_FRAME),
         ("timestamp", UINT64),
@@ -144,6 +167,8 @@ class ZCAN_RECEIVE_DATA(ctypes.Structure):
 
 
 class ZCAN_TRANSMIT_FD_DATA(ctypes.Structure):
+    """ctypes mirror of ``ZCAN_TransmitFD_Data``."""
+
     _fields_ = [
         ("frame", ZCAN_CANFD_FRAME),
         ("transmit_type", UINT),
@@ -151,6 +176,8 @@ class ZCAN_TRANSMIT_FD_DATA(ctypes.Structure):
 
 
 class ZCAN_RECEIVE_FD_DATA(ctypes.Structure):
+    """ctypes mirror of ``ZCAN_ReceiveFD_Data``."""
+
     _fields_ = [
         ("frame", ZCAN_CANFD_FRAME),
         ("timestamp", UINT64),
@@ -158,6 +185,8 @@ class ZCAN_RECEIVE_FD_DATA(ctypes.Structure):
 
 
 class ZCAN_DEVICE_INFO(ctypes.Structure):
+    """ctypes mirror of ``ZCAN_DEVICE_INFO`` (serial number is a NUL-terminated byte string)."""
+
     _fields_ = [
         ("hw_Version", USHORT),
         ("fw_Version", USHORT),
@@ -202,6 +231,8 @@ class ModelBError(RuntimeError):
 
 
 class _ReceivedFrame:
+    """Classic CAN frame pulled from the DLL before it is re-encoded as an ``AA 55`` packet."""
+
     __slots__ = ("arbitration_id", "data", "is_extended", "timestamp_us")
 
     def __init__(self, arbitration_id, data, is_extended, timestamp_us=0):
@@ -260,11 +291,11 @@ class _ModelBSerialProxy(QObject):
         self.CHANNEL_INDEX = channel_index
         self._explicit_dll_path = Path(dll_path) if dll_path else None
         self._library_loader = library_loader
-        self._dll = None
-        self._dll_path = None
+        self._dll: Any = None  # ctypes.WinDLL once loaded
+        self._dll_path: Path | None = None
         self._device_handle = None
         self._channel_handle = None
-        self._device_info = None
+        self._device_info: ZCAN_DEVICE_INFO | None = None
 
         self._is_open = False
         self._is_started = False
@@ -279,17 +310,18 @@ class _ModelBSerialProxy(QObject):
         self._stop_bits = None
         self._flow_control = None
 
-        self._rx_packets = deque()
+        self._rx_packets: deque[bytes] = deque()
         self._rx_condition = threading.Condition()
         self._tx_buffer = bytearray()
         self._tx_buffer_lock = threading.Lock()
         self._lifecycle_lock = threading.RLock()
 
         self._receive_stop = threading.Event()
-        self._receive_thread = None
+        self._receive_thread: threading.Thread | None = None
 
     @staticmethod
     def resolve_dll_path() -> Path:
+        """Locate ``ControlCANFD.dll``: beside the exe or in the PyInstaller bundle when frozen, else beside this module."""
         if getattr(sys, "frozen", False):
             beside_executable = Path(sys.executable).resolve().parent / "ControlCANFD.dll"
             if beside_executable.is_file():
@@ -336,19 +368,49 @@ class _ModelBSerialProxy(QObject):
     def _set_error(self, message, *, emit=True):
         self._last_error = str(message)
         self._last_write_ok = False
-        print(f"[USB-CAN-FD-B] {self._last_error}")
+        logger.warning("USB-CAN-FD-B: %s", self._last_error)
         if emit:
             self.modelBError.emit(self._last_error)
 
+    def scan_online_devices(self, max_devices=MAX_SCAN_DEVICES):
+        """Return ``(index, label)`` for each online USB-CAN-FD-B adapter.
+
+        The vendor DLL has no enumeration API, so each index is opened, checked
+        for online status, queried for its serial number and closed again. No
+        CAN channel is initialized or started, and this proxy is not opened.
+        """
+        self._load_library()
+        found = []
+        for index in range(max_devices):
+            handle = self._dll.ZCAN_OpenDevice(ZCAN_USBCANFD_200U, index, 0)
+            if not self._valid_handle(handle):
+                continue
+            try:
+                if int(self._dll.ZCAN_IsDeviceOnLine(handle)) != STATUS_ONLINE:
+                    continue
+                info = ZCAN_DEVICE_INFO()
+                self._check_status(
+                    self._dll.ZCAN_GetDeviceInf(handle, ctypes.byref(info)),
+                    "Read device information",
+                )
+                serial = bytes(info.str_Serial_Num).split(b"\0", 1)[0].decode("ascii", errors="replace")
+                found.append((index, f"Device {index}" + (f" / SN {serial}" if serial else "")))
+            finally:
+                self._check_status(self._dll.ZCAN_CloseDevice(handle), "Close scanned device")
+        return found
+
     def begin_operation(self):
+        """Reset the error state before a write so ``last_write_ok`` reflects only that call."""
         self._last_write_ok = True
         self._last_error = ""
 
     @property
     def last_write_ok(self):
+        """False if the most recent operation reported an error."""
         return self._last_write_ok
 
     def _load_library(self):
+        """Load the x64 ``ControlCANFD.dll`` once and bind the API; raises ``ModelBError`` with setup hints."""
         if self._dll is not None:
             return
         if struct.calcsize("P") * 8 != 64:
@@ -391,6 +453,7 @@ class _ModelBSerialProxy(QObject):
         function.argtypes = list(argtypes)
 
     def _bind_api(self):
+        """Declare argument/return types for every DLL function used."""
         handle = ctypes.c_void_p
         self._bind("ZCAN_OpenDevice", handle, UINT, UINT, UINT)
         self._bind("ZCAN_CloseDevice", UINT, handle)
@@ -473,6 +536,7 @@ class _ModelBSerialProxy(QObject):
         return self._is_open
 
     def open(self, mode=None):
+        """Open and verify the device (online, info readable); CAN starts when a config packet is written."""
         del mode
         if self._is_open:
             return True
@@ -530,6 +594,13 @@ class _ModelBSerialProxy(QObject):
             raise ModelBError("Invalid compatibility packet checksum.")
 
     def _configure_from_packet(self, packet):
+        """Apply a Model A configuration packet to the Model B channel.
+
+        Supports fixed-length mode, the bitrates in ``BITRATE_BY_CODE`` and normal
+        mode only. Resets the channel, sets arbitration and data bitrate to the same
+        value (ISO CAN-FD controller, classic frames only), opens the full ID filter,
+        starts CAN and the receive thread.
+        """
         if packet[2] == self.VARIABLE_LENGTH:
             raise ModelBError("Variable-length Model A packets are not supported.")
         if packet[2] != self.FIXED_LENGTH:
@@ -646,6 +717,7 @@ class _ModelBSerialProxy(QObject):
         self.start_receive()
 
     def _send_data_packet(self, packet):
+        """Transmit the CAN frame encoded in a Model A data packet."""
         if packet[2] != self.DATA_PACKET or packet[4] != self.DATA_PACKET:
             raise ModelBError("Unsupported compatibility data-packet type.")
 
@@ -695,6 +767,12 @@ class _ModelBSerialProxy(QObject):
             raise ModelBError(f"Unknown compatibility packet type 0x{packet[2]:02X}.")
 
     def write(self, data):
+        """Accept Model A ``AA 55`` packets and execute them.
+
+        Configuration packets (re)initialise and start the CAN channel; data packets
+        are transmitted as classic CAN frames. Returns ``len(data)`` on success or
+        ``-1`` on error (QSerialPort convention).
+        """
         raw = bytes(data)
         if not raw:
             return 0
@@ -766,6 +844,7 @@ class _ModelBSerialProxy(QObject):
         return bytes(packet)
 
     def _receive_available(self):
+        """Read up to ``RECEIVE_BATCH_SIZE`` frames currently queued in the DLL."""
         with self._lifecycle_lock:
             self._require_channel()
             available = int(
@@ -831,6 +910,7 @@ class _ModelBSerialProxy(QObject):
         self._check_online_status(result, "Receive Model B")
 
     def _receive_loop(self):
+        """Background thread: poll the DLL, queue frames as packets, and report a lost device."""
         last_online_check = 0.0
         try:
             while not self._receive_stop.is_set():
@@ -855,6 +935,7 @@ class _ModelBSerialProxy(QObject):
                 self.disconnected.emit(str(exc))
 
     def start_receive(self):
+        """Start the background thread that polls the DLL and queues received packets."""
         if not self._is_started:
             return
         if self._receive_thread is not None and self._receive_thread.is_alive():
@@ -868,6 +949,7 @@ class _ModelBSerialProxy(QObject):
         self._receive_thread.start()
 
     def stop_receive(self):
+        """Stop and join the receive thread."""
         self._receive_stop.set()
         thread = self._receive_thread
         if (
@@ -879,6 +961,7 @@ class _ModelBSerialProxy(QObject):
         self._receive_thread = None
 
     def readAll(self):
+        """Return the next queued received packet (one per call), or an empty ``QByteArray``."""
         with self._rx_condition:
             if not self._rx_packets:
                 return QByteArray()
@@ -886,10 +969,12 @@ class _ModelBSerialProxy(QObject):
         return QByteArray(packet)
 
     def bytesAvailable(self):
+        """Total bytes queued for :meth:`readAll`."""
         with self._rx_condition:
             return sum(len(packet) for packet in self._rx_packets)
 
     def waitForReadyRead(self, timeout_ms):
+        """Block until a packet is queued or ``timeout_ms`` elapses."""
         timeout = max(0, int(timeout_ms)) / 1000.0
         deadline = time.monotonic() + timeout
         with self._rx_condition:
@@ -903,6 +988,7 @@ class _ModelBSerialProxy(QObject):
             return True
 
     def clear(self, direction=None):
+        """Drop queued RX/TX bytes and clear the device receive buffer."""
         del direction
         with self._rx_condition:
             self._rx_packets.clear()
@@ -922,6 +1008,7 @@ class _ModelBSerialProxy(QObject):
         return True
 
     def close(self):
+        """Stop receiving, reset the channel and close the device; errors are reported, not raised."""
         self.stop_receive()
         with self._lifecycle_lock:
             if self._dll is not None and self._valid_handle(self._channel_handle):
@@ -996,6 +1083,7 @@ class USB_CANFD_B(USB_CAN_A):
         mask_id=0,
         modeCAN="Normal",
     ):
+        """Legacy VinD API: send a configuration packet; returns the packet or ``None`` on failure."""
         self.serial.begin_operation()
         packet = super().Send_Config(
             typeLength,
@@ -1010,6 +1098,7 @@ class USB_CANFD_B(USB_CAN_A):
         return packet
 
     def Send_Packet(self, frameID: bytes, frameData: bytes, lenDataField=8):
+        """Legacy VinD API: send one CAN packet; returns the packet or ``None`` on failure."""
         self.serial.begin_operation()
         packet = super().Send_Packet(frameID, frameData, lenDataField)
         if packet is None or not self.serial.last_write_ok:

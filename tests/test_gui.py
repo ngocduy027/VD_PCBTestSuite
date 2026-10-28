@@ -6,37 +6,35 @@ from PySide6.QtWidgets import QApplication, QGroupBox
 
 from pcbt_app.config import (
     DEFAULT_BITRATE,
-    DEFAULT_MODEL_B_CHANNEL,
     DEFAULT_SERIAL_BAUD,
     WAVESHARE_BACKEND,
     WAVESHARE_MODEL_B_BACKEND,
 )
-from pcbt_app.models import GongwangResultSet, TestVerdict as Verdict
+from pcbt_app.models import GongwangResultSet
+from pcbt_app.models import TestVerdict as Verdict
 from pcbt_app.protocol.mit_firmware import (
     CAN_STRESS_DEFAULT_INTERVAL_MS,
     CAN_STRESS_DEFAULT_TOTAL_MESSAGES,
     GONGWANG_DEFAULT_DURATION_MS,
-    MotorTestStatus,
-    MotorTestStopReason,
     OPEN_LOOP_DEFAULT_DURATION_MS,
     OPEN_LOOP_DEFAULT_THETA_STEP,
     RS485_STRESS_DEFAULT_DURATION_MS,
+    MotorTestStatus,
+    MotorTestStopReason,
 )
 from pcbt_app.services.pcb_test_service import ServiceResult
 from pcbt_app.transport.waveshare_usbcan_a import build_waveshare_config_packet
-from pcbt_app.ui.main_window import (
-    MainWindow,
-    MAX_TEST_TIMEOUT_MS,
-    RS485_STRESS_DEFAULT_TIMEOUT_MS,
-    bitrate_value_from_label,
-    format_waveshare_config_packet,
-    serial_baud_value_from_label,
-)
+from pcbt_app.ui.main_window import MainWindow
 from pcbt_app.ui.presets import (
     CAN_STRESS_APP_TIMEOUT_DEFAULT_MS,
     DETECT_ID_DEFAULT_TIMEOUT_MS,
     GONGWANG_APP_TIMEOUT_DEFAULT_MS,
+    MAX_TEST_TIMEOUT_MS,
     OPENLOOP_APP_TIMEOUT_DEFAULT_MS,
+    RS485_STRESS_DEFAULT_TIMEOUT_MS,
+    bitrate_value_from_label,
+    format_waveshare_config_packet,
+    serial_baud_value_from_label,
 )
 from pcbt_app.ui.styles import amplitude_value_stylesheet
 
@@ -170,9 +168,9 @@ def test_gui_has_fct_and_gw_encoder_workspace_tabs(qtbot) -> None:
 
 
 def test_gw_live_start_stop_and_independent_ring_updates(qtbot) -> None:
+    from pcbt_app.models import RawCanFrame
     from pcbt_app.protocol.gw_sincos import parse_gw_sincos_response
     from pcbt_app.services.gw_live_reader import GwLiveCycle
-    from pcbt_app.models import RawCanFrame
 
     window = MainWindow()
     qtbot.addWidget(window)
@@ -675,7 +673,7 @@ def test_c1_c2_configs_are_read_only_defaults_and_run_independently_of_advanced(
     qtbot, monkeypatch
 ) -> None:
     monkeypatch.setattr(
-        "pcbt_app.ui.main_window.list_waveshare_com_ports",
+        "pcbt_app.ui.adapter_panel.list_waveshare_com_ports",
         lambda: [("COM13", "USB-SERIAL CH340")],
     )
     window = MainWindow()
@@ -781,11 +779,11 @@ def test_c1_c2_configs_are_read_only_defaults_and_run_independently_of_advanced(
 
 def test_gui_test_panel_does_not_overlap_at_target_sizes(qtbot, monkeypatch) -> None:
     monkeypatch.setattr(
-        "pcbt_app.ui.main_window.list_waveshare_com_ports",
+        "pcbt_app.ui.adapter_panel.list_waveshare_com_ports",
         lambda: [("COM13", "USB-SERIAL CH340")],
     )
     monkeypatch.setattr(
-        "pcbt_app.ui.main_window.list_rs485_com_ports",
+        "pcbt_app.ui.adapter_panel.list_rs485_com_ports",
         lambda: [("COM14", "USB-SERIAL RS485")],
     )
     window = MainWindow()
@@ -841,7 +839,7 @@ def test_gui_test_panel_does_not_overlap_at_target_sizes(qtbot, monkeypatch) -> 
 
 def test_gui_refresh_ports_populates_detected_ports(qtbot, monkeypatch) -> None:
     monkeypatch.setattr(
-        "pcbt_app.ui.main_window.list_waveshare_com_ports",
+        "pcbt_app.ui.adapter_panel.list_waveshare_com_ports",
         lambda: [("COM13", "USB-SERIAL CH340")],
     )
     window = MainWindow()
@@ -872,7 +870,7 @@ def test_gui_model_b_uses_native_usb_device_without_com_settings(qtbot) -> None:
 
 def test_gui_refresh_rs485_ports_populates_detected_ports(qtbot, monkeypatch) -> None:
     monkeypatch.setattr(
-        "pcbt_app.ui.main_window.list_rs485_com_ports",
+        "pcbt_app.ui.adapter_panel.list_rs485_com_ports",
         lambda: [("COM14", "USB-SERIAL RS485")],
     )
     window = MainWindow()
@@ -888,7 +886,7 @@ def test_gui_refresh_rs485_ports_populates_detected_ports(qtbot, monkeypatch) ->
 
 def test_open_emits_connection_request(qtbot, monkeypatch) -> None:
     monkeypatch.setattr(
-        "pcbt_app.ui.main_window.list_waveshare_com_ports",
+        "pcbt_app.ui.adapter_panel.list_waveshare_com_ports",
         lambda: [("COM13", "USB-SERIAL CH340")],
     )
     window = MainWindow()
@@ -910,7 +908,7 @@ def test_open_emits_connection_request(qtbot, monkeypatch) -> None:
 
 def test_com_toggle_closes_after_successful_open(qtbot, monkeypatch) -> None:
     monkeypatch.setattr(
-        "pcbt_app.ui.main_window.list_waveshare_com_ports",
+        "pcbt_app.ui.adapter_panel.list_waveshare_com_ports",
         lambda: [("COM13", "USB-SERIAL CH340")],
     )
     window = MainWindow()
@@ -927,7 +925,7 @@ def test_com_toggle_closes_after_successful_open(qtbot, monkeypatch) -> None:
 
 def test_detect_id_flow_enables_openloop_after_pass(qtbot, monkeypatch) -> None:
     monkeypatch.setattr(
-        "pcbt_app.ui.main_window.list_waveshare_com_ports",
+        "pcbt_app.ui.adapter_panel.list_waveshare_com_ports",
         lambda: [("COM13", "USB-SERIAL CH340")],
     )
     window = MainWindow()
@@ -967,7 +965,7 @@ def test_detect_id_flow_enables_openloop_after_pass(qtbot, monkeypatch) -> None:
 
 def test_gui_current_fct_fields_emit_typed_values(qtbot, monkeypatch) -> None:
     monkeypatch.setattr(
-        "pcbt_app.ui.main_window.list_waveshare_com_ports",
+        "pcbt_app.ui.adapter_panel.list_waveshare_com_ports",
         lambda: [("COM13", "USB-SERIAL CH340")],
     )
     window = MainWindow()
@@ -1009,7 +1007,7 @@ def test_gui_current_fct_fields_emit_typed_values(qtbot, monkeypatch) -> None:
 
 def test_gui_openloop_parameter_defaults_and_validation(qtbot, monkeypatch) -> None:
     monkeypatch.setattr(
-        "pcbt_app.ui.main_window.list_waveshare_com_ports",
+        "pcbt_app.ui.adapter_panel.list_waveshare_com_ports",
         lambda: [("COM13", "USB-SERIAL CH340")],
     )
     window = MainWindow()
@@ -1040,7 +1038,7 @@ def test_gui_openloop_parameter_defaults_and_validation(qtbot, monkeypatch) -> N
 
 def test_gui_invalid_timeout_does_not_emit(qtbot, monkeypatch) -> None:
     monkeypatch.setattr(
-        "pcbt_app.ui.main_window.list_waveshare_com_ports",
+        "pcbt_app.ui.adapter_panel.list_waveshare_com_ports",
         lambda: [("COM13", "USB-SERIAL CH340")],
     )
     window = MainWindow()
@@ -1060,7 +1058,7 @@ def test_gui_invalid_timeout_does_not_emit(qtbot, monkeypatch) -> None:
 
 def test_fct_fields_allow_other_compatible_tests_while_one_runs(qtbot, monkeypatch) -> None:
     monkeypatch.setattr(
-        "pcbt_app.ui.main_window.list_waveshare_com_ports",
+        "pcbt_app.ui.adapter_panel.list_waveshare_com_ports",
         lambda: [("COM13", "USB-SERIAL CH340")],
     )
     window = MainWindow()
@@ -1106,11 +1104,11 @@ def test_fct_fields_allow_other_compatible_tests_while_one_runs(qtbot, monkeypat
 
 def test_rs485_open_and_stress_signal(qtbot, monkeypatch) -> None:
     monkeypatch.setattr(
-        "pcbt_app.ui.main_window.list_waveshare_com_ports",
+        "pcbt_app.ui.adapter_panel.list_waveshare_com_ports",
         lambda: [("COM13", "USB-SERIAL CH340")],
     )
     monkeypatch.setattr(
-        "pcbt_app.ui.main_window.list_rs485_com_ports",
+        "pcbt_app.ui.adapter_panel.list_rs485_com_ports",
         lambda: [("COM14", "USB-SERIAL RS485")],
     )
     window = MainWindow()
@@ -1147,7 +1145,7 @@ def test_rs485_open_and_stress_signal(qtbot, monkeypatch) -> None:
 
 def test_rs485_stress_invalid_timeout_does_not_emit(qtbot, monkeypatch) -> None:
     monkeypatch.setattr(
-        "pcbt_app.ui.main_window.list_waveshare_com_ports",
+        "pcbt_app.ui.adapter_panel.list_waveshare_com_ports",
         lambda: [("COM13", "USB-SERIAL CH340")],
     )
     window = MainWindow()
@@ -1171,7 +1169,7 @@ def test_rs485_stress_invalid_timeout_does_not_emit(qtbot, monkeypatch) -> None:
 
 def test_gui_shows_waveshare_config_defaults(qtbot, monkeypatch) -> None:
     monkeypatch.setattr(
-        "pcbt_app.ui.main_window.list_waveshare_com_ports",
+        "pcbt_app.ui.adapter_panel.list_waveshare_com_ports",
         lambda: [("COM13", "USB-SERIAL CH340")],
     )
     window = MainWindow()
@@ -1193,7 +1191,7 @@ def test_gui_shows_waveshare_config_defaults(qtbot, monkeypatch) -> None:
 
 def test_set_and_start_enabled_after_open_and_updates_console(qtbot, monkeypatch) -> None:
     monkeypatch.setattr(
-        "pcbt_app.ui.main_window.list_waveshare_com_ports",
+        "pcbt_app.ui.adapter_panel.list_waveshare_com_ports",
         lambda: [("COM13", "USB-SERIAL CH340")],
     )
     window = MainWindow()
@@ -1215,7 +1213,7 @@ def test_set_and_start_enabled_after_open_and_updates_console(qtbot, monkeypatch
 
 def test_gui_shows_current_fct_summary(qtbot, monkeypatch) -> None:
     monkeypatch.setattr(
-        "pcbt_app.ui.main_window.list_waveshare_com_ports",
+        "pcbt_app.ui.adapter_panel.list_waveshare_com_ports",
         lambda: [("COM13", "USB-SERIAL CH340")],
     )
     window = MainWindow()
@@ -1339,7 +1337,7 @@ def test_workspace_and_encoder_tab_switches_clear_completed_cards(qtbot) -> None
 
 def test_gui_can_stress_defaults_and_signal(qtbot, monkeypatch) -> None:
     monkeypatch.setattr(
-        "pcbt_app.ui.main_window.list_waveshare_com_ports",
+        "pcbt_app.ui.adapter_panel.list_waveshare_com_ports",
         lambda: [("COM13", "USB-SERIAL CH340")],
     )
     window = MainWindow()
@@ -1372,7 +1370,7 @@ def test_gui_can_stress_defaults_and_signal(qtbot, monkeypatch) -> None:
 
 def test_gui_can_stress_invalid_input_does_not_emit(qtbot, monkeypatch) -> None:
     monkeypatch.setattr(
-        "pcbt_app.ui.main_window.list_waveshare_com_ports",
+        "pcbt_app.ui.adapter_panel.list_waveshare_com_ports",
         lambda: [("COM13", "USB-SERIAL CH340")],
     )
     window = MainWindow()
@@ -1401,7 +1399,7 @@ def test_gui_can_stress_invalid_input_does_not_emit(qtbot, monkeypatch) -> None:
 
 def test_gui_gongwang_defaults_and_signal(qtbot, monkeypatch) -> None:
     monkeypatch.setattr(
-        "pcbt_app.ui.main_window.list_waveshare_com_ports",
+        "pcbt_app.ui.adapter_panel.list_waveshare_com_ports",
         lambda: [("COM13", "USB-SERIAL CH340")],
     )
     window = MainWindow()
@@ -1426,7 +1424,7 @@ def test_gui_gongwang_defaults_and_signal(qtbot, monkeypatch) -> None:
 
 def test_gui_shows_compact_gongwang_fct_result(qtbot, monkeypatch) -> None:
     monkeypatch.setattr(
-        "pcbt_app.ui.main_window.list_waveshare_com_ports",
+        "pcbt_app.ui.adapter_panel.list_waveshare_com_ports",
         lambda: [("COM13", "USB-SERIAL CH340")],
     )
     window = MainWindow()
@@ -1473,7 +1471,7 @@ def test_gui_shows_compact_gongwang_fct_result(qtbot, monkeypatch) -> None:
 
 def test_gui_logs_gongwang_encoder_fault_bits_from_lsb(qtbot, monkeypatch) -> None:
     monkeypatch.setattr(
-        "pcbt_app.ui.main_window.list_waveshare_com_ports",
+        "pcbt_app.ui.adapter_panel.list_waveshare_com_ports",
         lambda: [("COM13", "USB-SERIAL CH340")],
     )
     window = MainWindow()
@@ -1502,7 +1500,7 @@ def test_gui_logs_gongwang_encoder_fault_bits_from_lsb(qtbot, monkeypatch) -> No
 
 def test_gui_shows_can_stress_counters(qtbot, monkeypatch) -> None:
     monkeypatch.setattr(
-        "pcbt_app.ui.main_window.list_waveshare_com_ports",
+        "pcbt_app.ui.adapter_panel.list_waveshare_com_ports",
         lambda: [("COM13", "USB-SERIAL CH340")],
     )
     window = MainWindow()
@@ -1544,7 +1542,7 @@ def test_gui_shows_can_stress_counters(qtbot, monkeypatch) -> None:
 
 def test_gui_shows_rs485_stress_counters(qtbot, monkeypatch) -> None:
     monkeypatch.setattr(
-        "pcbt_app.ui.main_window.list_waveshare_com_ports",
+        "pcbt_app.ui.adapter_panel.list_waveshare_com_ports",
         lambda: [("COM13", "USB-SERIAL CH340")],
     )
     window = MainWindow()
@@ -1725,6 +1723,7 @@ def test_custom_amplitude_boundaries(value, color):
 def test_amplitude_range_dialog_apply_cancel_restore_and_persistence(qtbot, tmp_path):
     from PySide6.QtCore import QSettings
     from PySide6.QtWidgets import QDialogButtonBox
+
     from pcbt_app.ui.amplitude_range import AmplitudeRange, AmplitudeRangeDialog
     path = str(tmp_path / "amplitude.ini")
     settings = QSettings(path, QSettings.IniFormat)
@@ -1743,7 +1742,7 @@ def test_amplitude_range_dialog_apply_cancel_restore_and_persistence(qtbot, tmp_
         dialog.buttons.button(QDialogButtonBox.Apply).click()
         assert dialog.error.text()
         assert window._amplitude_limits == AmplitudeRange()
-        for field, value in zip(dialog.fields, (400, 800, 1600)):
+        for field, value in zip(dialog.fields, (400, 800, 1600), strict=True):
             field.setValue(value)
         dialog.buttons.button(QDialogButtonBox.Apply).click()
         for fields in window.gw_live_fields.values():
@@ -1781,6 +1780,7 @@ def test_amplitude_range_dialog_apply_cancel_restore_and_persistence(qtbot, tmp_
 @pytest.mark.parametrize("bad", ["invalid", "nan", "inf", -1, 1800])
 def test_invalid_saved_amplitude_range_falls_back(tmp_path, bad):
     from PySide6.QtCore import QSettings
+
     from pcbt_app.ui.amplitude_range import AmplitudeRange
     settings = QSettings(str(tmp_path / "bad.ini"), QSettings.IniFormat)
     settings.setValue("encoder/amplitude/yellow_start", bad)
@@ -1789,6 +1789,7 @@ def test_invalid_saved_amplitude_range_falls_back(tmp_path, bad):
 
 def test_amplitude_range_arrow_buttons_are_clickable(qtbot):
     from PySide6.QtWidgets import QStyle, QStyleOptionSpinBox
+
     from pcbt_app.ui.amplitude_range import AmplitudeRange, AmplitudeRangeDialog
     window = MainWindow()
     qtbot.addWidget(window)

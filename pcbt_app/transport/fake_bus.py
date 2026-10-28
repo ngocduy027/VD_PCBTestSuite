@@ -1,3 +1,5 @@
+"""In-memory transport for tests: records sent frames and replays queued ones."""
+
 from __future__ import annotations
 
 from collections import deque
@@ -7,8 +9,15 @@ from pcbt_app.models import RawCanFrame
 from pcbt_app.transport.base import AbstractCanTransport, CanTransportError
 
 
-@dataclass(slots=True)
+@dataclass(slots=True, weakref_slot=True)
 class FakeCanTransport(AbstractCanTransport):
+    """Scriptable transport for unit tests.
+
+    ``stale_frames`` are returned by :meth:`drain` (frames left from before a
+    test), ``queued_frames`` by :meth:`recv` in order, and everything sent is
+    appended to ``sent_frames``. ``fail_on_send`` injects a send error.
+    """
+
     stale_frames: deque[RawCanFrame] = field(default_factory=deque)
     queued_frames: deque[RawCanFrame] = field(default_factory=deque)
     sent_frames: list[RawCanFrame] = field(default_factory=list)

@@ -1,3 +1,5 @@
+"""Create the transport implementation for a backend name."""
+
 from __future__ import annotations
 
 from pcbt_app.config import WAVESHARE_BACKEND, WAVESHARE_MODEL_B_BACKEND
@@ -12,6 +14,7 @@ def create_transport(
     bitrate: int,
     serial_baud: int = 2_000_000,
 ) -> AbstractCanTransport:
+    """Return an unconnected transport for ``backend``; unknown names are passed to python-can as its interface name."""
     if backend == WAVESHARE_BACKEND:
         return WaveshareUsbCanATransport(channel=channel, can_bitrate=bitrate, serial_baud=serial_baud)
     if backend == WAVESHARE_MODEL_B_BACKEND:

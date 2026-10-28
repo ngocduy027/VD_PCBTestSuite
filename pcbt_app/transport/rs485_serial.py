@@ -1,9 +1,11 @@
+"""Raw RS485 serial transport and stream parser used by the RS485 stress test."""
+
 from __future__ import annotations
 
-from collections import deque
 from dataclasses import dataclass, field
 from threading import Event, Lock, Thread
-from time import monotonic, sleep
+from time import sleep
+from typing import Any
 
 try:
     import serial
@@ -17,7 +19,6 @@ except ImportError:  # pragma: no cover - exercised only in broken installs
 from pcbt_app.protocol.mit_firmware import RS485_STRESS_DEFAULT_BAUD
 from pcbt_app.transport.base import CanTransportError
 
-
 RS485_FRAME_LENGTH = 10
 RS485_FRAME_PATTERN = b"\xAA" * 5
 
@@ -27,39 +28,22 @@ class Rs485TransportError(CanTransportError):
 
 
 def require_pyserial() -> None:
+    """Raise :class:`Rs485TransportError` if pyserial is not installed."""
     if serial is None:
         raise Rs485TransportError("pyserial missing; install pyserial>=3.5 to use RS485 serial")
 
 
 def list_rs485_com_ports() -> list[tuple[str, str]]:
+    """``(device, description)`` for every serial port on the PC."""
     require_pyserial()
     assert list_ports is not None
     return [(port.device, port.description) for port in list_ports.comports()]
 
 
-class FixedLengthRs485Parser:
-    """Legacy fixed-size chunker retained for non-FCT callers."""
-
-    def __init__(self, frame_length: int) -> None:
-        if frame_length <= 0:
-            raise ValueError("frame_length must be positive")
-        self.frame_length = frame_length
-        self._buffer = bytearray()
-
-    def feed(self, data: bytes) -> list[bytes]:
-        self._buffer.extend(data)
-        frames: list[bytes] = []
-        while len(self._buffer) >= self.frame_length:
-            frames.append(bytes(self._buffer[: self.frame_length]))
-            del self._buffer[: self.frame_length]
-        return frames
-
-    def clear(self) -> None:
-        self._buffer.clear()
-
-
 @dataclass(slots=True, frozen=True)
 class Rs485ParserSnapshot:
+    """Counters captured by :class:`FctRs485StreamParser` at one point in time."""
+
     valid_frame_count: int
     malformed_count: int
     sequence_error_count: int
@@ -80,6 +64,7 @@ class FctRs485StreamParser:
         self.reset()
 
     def reset(self) -> None:
+        """Clear the buffer and all counters; the next expected sequence is 0."""
         self._buffer.clear()
         self.valid_frame_count = 0
         self.malformed_count = 0
@@ -91,6 +76,12 @@ class FctRs485StreamParser:
         self.received_byte_count = 0
 
     def feed(self, data: bytes) -> None:
+        """Parse received bytes.
+
+        Frame layout (10 bytes): ``0x9A``, sequence (u24 LE), five ``0xAA`` bytes,
+        XOR of bytes 0..8. Bytes that do not form a valid frame count as malformed;
+        a sequence number other than the expected one counts as a sequence error.
+        """
         self.received_byte_count += len(data)
         self._buffer.extend(data)
         cursor = 0
@@ -125,11 +116,13 @@ class FctRs485StreamParser:
             del self._buffer[:cursor]
 
     def finalize(self) -> None:
+        """Count any leftover partial frame as malformed and drop it."""
         if self._buffer:
             self.malformed_count += 1
             self._buffer.clear()
 
     def snapshot(self, transport_error: str | None = None) -> Rs485ParserSnapshot:
+        """Current counters, optionally tagged with the reader thread's error."""
         return Rs485ParserSnapshot(
             valid_frame_count=self.valid_frame_count,
             malformed_count=self.malformed_count,
@@ -153,13 +146,20 @@ def _xor(data: bytes | bytearray) -> int:
 
 @dataclass(slots=True)
 class SerialRs485Transport:
+    """RS485 serial port used only by the RS485 stress test.
+
+    A background thread reads the port continuously; while a capture is active
+    (:meth:`begin_capture` .. :meth:`finish_capture`) the bytes go to
+    :class:`FctRs485StreamParser`. Requires exactly 2.5 Mbaud.
+
+    Reader-thread failures are reported through the snapshot's
+    ``transport_error``.
+    """
+
     channel: str
     baudrate: int = RS485_STRESS_DEFAULT_BAUD
-    frame_length: int = RS485_FRAME_LENGTH
-    _serial: object | None = None
-    _parser: FixedLengthRs485Parser = field(init=False)
+    _serial: Any = None  # serial.Serial once connected; Any because pyserial is optional
     _stress_parser: FctRs485StreamParser = field(init=False)
-    _pending_frames: deque[bytes] = field(default_factory=deque)
     _reader_stop: Event = field(default_factory=Event)
     _reader_thread: Thread | None = None
     _lock: Lock = field(default_factory=Lock)
@@ -167,10 +167,10 @@ class SerialRs485Transport:
     _reader_error: str | None = None
 
     def __post_init__(self) -> None:
-        self._parser = FixedLengthRs485Parser(self.frame_length)
         self._stress_parser = FctRs485StreamParser()
 
     def connect(self) -> None:
+        """Open the port and start the reader thread; validates baud rate and port existence."""
         require_pyserial()
         if self._serial is not None:
             return
@@ -206,6 +206,7 @@ class SerialRs485Transport:
             raise Rs485TransportError(f"Failed to open RS485 serial on {self.channel}: {message}") from exc
 
     def disconnect(self) -> None:
+        """Stop the reader thread and close the port."""
         serial_port = self._serial
         if serial_port is None:
             return
@@ -219,59 +220,36 @@ class SerialRs485Transport:
                 self._serial = None
                 self._reader_thread = None
                 self._capture_active = False
-                self._parser.clear()
                 self._stress_parser.reset()
-                self._pending_frames.clear()
 
     def is_connected(self) -> bool:
         return self._serial is not None and bool(getattr(self._serial, "is_open", False))
 
     def begin_capture(self) -> None:
+        """Flush the port and start counting frames from zero."""
         if not self.is_connected():
             raise Rs485TransportError("RS485 serial is not connected")
         with self._lock:
             assert self._serial is not None
             self._serial.reset_input_buffer()
-            self._parser.clear()
-            self._pending_frames.clear()
             self._stress_parser.reset()
             self._reader_error = None
             self._capture_active = True
 
     def capture_snapshot(self) -> Rs485ParserSnapshot:
+        """Counters so far, without ending the capture (used for live progress)."""
         with self._lock:
             return self._stress_parser.snapshot(self._reader_error)
 
     def finish_capture(self) -> Rs485ParserSnapshot:
+        """End the capture and return the final counters."""
         with self._lock:
             self._capture_active = False
             self._stress_parser.finalize()
             return self._stress_parser.snapshot(self._reader_error)
 
-    def recv(self, timeout_s: float = 0.0) -> bytes | None:
-        if not self.is_connected():
-            raise Rs485TransportError("RS485 serial is not connected")
-        deadline = monotonic() + max(0.0, timeout_s)
-        while True:
-            with self._lock:
-                if self._pending_frames:
-                    return self._pending_frames.popleft()
-                reader_error = self._reader_error
-            if reader_error:
-                raise Rs485TransportError(reader_error)
-            if timeout_s <= 0 or monotonic() >= deadline:
-                return None
-            sleep(min(0.002, max(0.0, deadline - monotonic())))
-
-    def drain(self) -> list[bytes]:
-        drained: list[bytes] = []
-        while True:
-            frame = self.recv(timeout_s=0.0)
-            if frame is None:
-                return drained
-            drained.append(frame)
-
     def _reader_loop(self) -> None:
+        """Background thread: read serial bytes and feed the parser while a capture is active."""
         while not self._reader_stop.is_set():
             try:
                 with self._lock:

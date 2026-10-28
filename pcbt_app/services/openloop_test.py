@@ -1,16 +1,31 @@
+"""Legacy open-loop test: spin the motor with a fixed voltage vector.
+
+Writes Vd/Vq/theta-step/duration, unlocks and starts the test, then polls
+status until FINISHED. PASS only when the stop reason is COMPLETED; any other
+ending (fault, timeout) sends a stop command and FAILs.
+"""
+
 from __future__ import annotations
 
-from time import monotonic, sleep
+from time import monotonic
+from typing import TYPE_CHECKING
 
 from pcbt_app.protocol.mit_firmware import (
     CAN_INDEX_TEST_ACTIVE,
     CAN_INDEX_TEST_ELAPSED_MS,
     CAN_INDEX_TEST_STATUS,
     CAN_INDEX_TEST_STOP_REASON,
-    MotorTestStatus,
-    MotorTestStopReason,
+    CAN_INDEX_TEST_UNLOCK,
+    DIAG_TEST_UNLOCK_KEY,
+    MOTOR_TEST_ACTIVE_STATUSES,
     OPEN_LOOP_DEFAULT_DURATION_MS,
     OPEN_LOOP_DEFAULT_THETA_STEP,
+    OPEN_LOOP_MAX_ABS_THETA_STEP,
+    OPEN_LOOP_MAX_DURATION_MS,
+    OPEN_LOOP_MIN_DURATION_MS,
+    MotorTestId,
+    MotorTestStatus,
+    MotorTestStopReason,
     build_openloop_default_write_frames,
     build_openloop_start_frame,
     build_openloop_unlock_frame,
@@ -19,20 +34,23 @@ from pcbt_app.protocol.mit_firmware import (
 )
 from pcbt_app.transport.base import CanTransportError
 
+if TYPE_CHECKING:
+    from pcbt_app.services.pcb_test_service import PcbTestService, ServiceResult
+
 
 def run_openloop_test(
-    service,
+    service: PcbTestService,
     timeout_ms: int,
     driver_id: int | None = None,
     theta_step: float = OPEN_LOOP_DEFAULT_THETA_STEP,
     duration_ms: int = OPEN_LOOP_DEFAULT_DURATION_MS,
-):
-    self = service
+) -> ServiceResult:
+    """Run the legacy open-loop test; see the module docstring for the sequence."""
     start = monotonic()
     events: list[str] = []
 
     if driver_id is None:
-        return self._result(
+        return service._result(
             "Open-loop Test",
             False,
             "Driver ID is required; run Detect ID first",
@@ -40,13 +58,25 @@ def run_openloop_test(
             events,
         )
     if not 0 <= driver_id <= 0xFF:
-        return self._result("Open-loop Test", False, f"Driver ID out of range: {driver_id}", start, events)
-    if not -0.002 <= theta_step <= 0.002:
-        return self._result("Open-loop Test", False, "Open-loop theta step must be -0.002..0.002", start, events)
-    if not 100 <= duration_ms <= 60_000:
-        return self._result("Open-loop Test", False, "Open-loop duration must be 100..60000 ms", start, events)
+        return service._result("Open-loop Test", False, f"Driver ID out of range: {driver_id}", start, events)
+    if not -OPEN_LOOP_MAX_ABS_THETA_STEP <= theta_step <= OPEN_LOOP_MAX_ABS_THETA_STEP:
+        return service._result(
+            "Open-loop Test",
+            False,
+            f"Open-loop theta step must be -{OPEN_LOOP_MAX_ABS_THETA_STEP}..{OPEN_LOOP_MAX_ABS_THETA_STEP}",
+            start,
+            events,
+        )
+    if not OPEN_LOOP_MIN_DURATION_MS <= duration_ms <= OPEN_LOOP_MAX_DURATION_MS:
+        return service._result(
+            "Open-loop Test",
+            False,
+            f"Open-loop duration must be {OPEN_LOOP_MIN_DURATION_MS}..{OPEN_LOOP_MAX_DURATION_MS} ms",
+            start,
+            events,
+        )
 
-    drain_result = self._drain_before_command("Open-loop Test")
+    drain_result = service._drain_before_command("Open-loop Test")
     if drain_result is not None:
         return drain_result
 
@@ -54,12 +84,12 @@ def run_openloop_test(
     try:
         for frame in build_openloop_default_write_frames(driver_id, theta_step, duration_ms):
             index = frame.data[0] | (frame.data[1] << 8)
-            self._send_openloop_command(frame, f"write 0x{index:04X}", deadline)
+            service._send_diagnostic_command(frame, f"write 0x{index:04X}", deadline)
 
-        self._send_openloop_command(build_openloop_unlock_frame(driver_id), "unlock diagnostic test", deadline)
-        events.append("wrote 0x7204 = 0x54455354")
-        self._send_openloop_command(build_openloop_start_frame(driver_id), "start open-loop", deadline)
-        events.append("wrote 0x7200 = 1")
+        service._send_diagnostic_command(build_openloop_unlock_frame(driver_id), "unlock diagnostic test", deadline)
+        events.append(f"wrote 0x{CAN_INDEX_TEST_UNLOCK:04X} = 0x{DIAG_TEST_UNLOCK_KEY:08X}")
+        service._send_diagnostic_command(build_openloop_start_frame(driver_id), "start open-loop", deadline)
+        events.append(f"wrote 0x{CAN_INDEX_TEST_ACTIVE:04X} = {MotorTestId.OPEN_LOOP:d}")
 
         saw_status_response = False
         saw_active_status = False
@@ -67,18 +97,17 @@ def run_openloop_test(
         latest_stop_reason: int | None = None
         latest_elapsed_ms: int | None = None
         while monotonic() < deadline:
-            active_test = self._read_u32(driver_id, CAN_INDEX_TEST_ACTIVE, deadline, events)
-            status = self._read_u32(driver_id, CAN_INDEX_TEST_STATUS, deadline, events)
-            stop_reason = self._read_u32(driver_id, CAN_INDEX_TEST_STOP_REASON, deadline, events)
-            elapsed_ms = self._read_u32(driver_id, CAN_INDEX_TEST_ELAPSED_MS, deadline, events)
+            active_test = service._read_u32(driver_id, CAN_INDEX_TEST_ACTIVE, deadline, events)
+            status = service._read_u32(driver_id, CAN_INDEX_TEST_STATUS, deadline, events)
+            stop_reason = service._read_u32(driver_id, CAN_INDEX_TEST_STOP_REASON, deadline, events)
+            elapsed_ms = service._read_u32(driver_id, CAN_INDEX_TEST_ELAPSED_MS, deadline, events)
 
             if active_test is not None:
                 events.append(f"active test {active_test}")
-                if active_test != 0:
+                if active_test != MotorTestId.NONE:
                     saw_active_status = True
             if status is None:
-                if self.poll_interval_s > 0:
-                    sleep(min(self.poll_interval_s, max(0.0, deadline - monotonic())))
+                service._poll_sleep(deadline)
                 continue
 
             saw_status_response = True
@@ -87,23 +116,16 @@ def run_openloop_test(
             latest_elapsed_ms = elapsed_ms
             events.append(f"status {status_label(status)}")
             if status == MotorTestStatus.IDLE and not saw_active_status:
-                if self.poll_interval_s > 0:
-                    sleep(min(self.poll_interval_s, max(0.0, deadline - monotonic())))
+                service._poll_sleep(deadline)
                 continue
 
-            if status in (
-                MotorTestStatus.REQUESTED,
-                MotorTestStatus.WAITING_DRIVER,
-                MotorTestStatus.STARTUP_GUARD,
-                MotorTestStatus.RUNNING,
-            ):
+            if status in MOTOR_TEST_ACTIVE_STATUSES:
                 saw_active_status = True
-                if self.poll_interval_s > 0:
-                    sleep(min(self.poll_interval_s, max(0.0, deadline - monotonic())))
+                service._poll_sleep(deadline)
                 continue
 
             if status == MotorTestStatus.FINISHED and stop_reason == MotorTestStopReason.COMPLETED:
-                return self._result(
+                return service._result(
                     "Open-loop Test",
                     True,
                     "PASS",
@@ -119,7 +141,7 @@ def run_openloop_test(
                 f"Open-loop ended with status {status_label(status)} "
                 f"and stop reason {stop_reason_label(stop_reason)}"
             )
-            return self._openloop_fail(reason, start, events, driver_id, status, stop_reason, elapsed_ms)
+            return service._openloop_fail(reason, start, events, driver_id, status, stop_reason, elapsed_ms)
 
         reason = (
             "Timeout waiting for open-loop completion"
@@ -130,7 +152,7 @@ def run_openloop_test(
                 else "No read response for open-loop status before timeout"
             )
         )
-        return self._openloop_fail(
+        return service._openloop_fail(
             reason,
             start,
             events,
@@ -140,4 +162,4 @@ def run_openloop_test(
             latest_elapsed_ms,
         )
     except CanTransportError as exc:
-        return self._openloop_fail(str(exc), start, events, driver_id, None, None)
+        return service._openloop_fail(str(exc), start, events, driver_id, None, None)

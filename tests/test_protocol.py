@@ -1,25 +1,26 @@
 import struct
 
 from pcbt_app.models import RawCanFrame
+from pcbt_app.protocol.ids import build_extended_id, parse_extended_id
 from pcbt_app.protocol.mit_firmware import (
     CAN_INDEX_TEST_ACTIVE,
     CAN_INDEX_TEST_CAN_INTERVAL_MS,
     CAN_INDEX_TEST_CAN_TOTAL_MESSAGES,
-    CAN_INDEX_TEST_UNLOCK,
     CAN_INDEX_TEST_OPEN_LOOP_DURATION_MS,
     CAN_INDEX_TEST_OPEN_LOOP_THETA_STEP,
     CAN_INDEX_TEST_OPEN_LOOP_VD,
     CAN_INDEX_TEST_OPEN_LOOP_VQ,
     CAN_INDEX_TEST_STATUS,
+    CAN_INDEX_TEST_UNLOCK,
     DIAG_TEST_UNLOCK_KEY,
-    MotorTestStatus,
-    MotorTestStopReason,
     OPEN_LOOP_DEFAULT_DURATION_MS,
     OPEN_LOOP_DEFAULT_THETA_STEP,
-    build_enable_frame,
+    MotorTestStatus,
+    MotorTestStopReason,
     build_can_stress_config_frames,
     build_can_stress_start_frame,
     build_can_stress_stop_frame,
+    build_enable_frame,
     build_get_id_frame,
     build_openloop_default_write_frames,
     build_openloop_start_frame,
@@ -32,7 +33,6 @@ from pcbt_app.protocol.mit_firmware import (
     status_label,
     stop_reason_label,
 )
-from pcbt_app.protocol.ids import build_extended_id, parse_extended_id
 
 
 def test_parse_extended_id() -> None:
